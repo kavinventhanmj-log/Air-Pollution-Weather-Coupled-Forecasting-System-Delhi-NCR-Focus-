@@ -84,6 +84,48 @@ is used (`inversion_source = "pbl_proxy"`; never a surface-temperature threshold
 when `profile_available`, else the proxy. PBL dispersion condition:
 `<150 m` TRAPPED, `<300 m` LIMITED, `<500 m` MODERATE, else GOOD.
 
+### 3.1 Layer geometry (base/top height, thickness)
+
+The strongest layer's depth is reported in metres as well as hPa. Heights use
+real geopotential heights when the feed supplies them, otherwise the
+first-order **hypsometric equation** integrated upward from 1000 hPa with each
+layer's mean temperature:
+
+```
+dz [m]      = (R_d · T̄ [K] / g) · ln(p_base / p_top)
+R_d         = 287.05 J kg⁻¹ K⁻¹      # ICAO dry-air specific gas constant
+g           = 9.80665 m s⁻²
+T̄           = (T_base + T_top) / 2   # layer mean, +273.15 to K
+inversion_thickness_hpa = p_base − p_top
+inversion_thickness_m    = z_top − z_base
+```
+
+A supplied geopotential height anchors that level, and the levels above it are
+integrated from that anchor, so a partially populated profile still yields a
+complete set. When the lowest stored level is not 1000 hPa the heights are
+*depths* relative to that level rather than altitudes. Under the PBL proxy
+there is no profile, so all geometry fields are `null` — never a fabricated
+number.
+
+### 3.2 Episode duration and persistence (`ml/features/inversion.py`)
+
+`summarise_inversion_episode` measures the current episode over the stored
+hourly history (`GET /api/inversion/{station}` reads a bounded 48 h window and
+re-analyses the profile at every reading):
+
+```
+current_duration_h = (t_newest − t_onset) + median_sampling_interval
+persistence_fraction = inverted samples / samples in trailing 24 h
+```
+
+A sampling gap larger than `EPISODE_GAP_TOLERANCE_H = 3 h` **breaks** the run and
+the gap is *not* added to the duration: nothing was observed during it, so
+counting it would claim persistence that was never measured. The response
+carries `inversion_measured_window_h`, `inversion_episode_samples` and
+`inversion_history_sufficient` alongside the values, so an episode is never
+presented as longer than the archive behind it. No extrapolation past the
+newest sample is performed.
+
 ## 4. Fire impact (`ml/features/fire_impact.py`)
 
 Radius `MAX_DISTANCE_KM = 500` km; fires beyond are ignored.
@@ -232,6 +274,44 @@ meteorology); (3) correct PBL/temperature/inversion/stability; (4) persist the
 corrected fields and re-enter (two-way feedback). `/api/forecast/coupled`
 returns both the coupled and the uncoupled series plus the hour-by-hour
 `feedback_path`.
+
+### 11.1 Coupling ablation (`ml/evaluation/ablation.py`)
+
+`run_coupling_ablation` measures whether the six coupling features actually
+improve forecasts. The same model type and hyper-parameters are fitted twice on
+the **same** chronological split (`chronological_split_by_time`, 60/15/25),
+selecting on validation and scoring on the held-out test set; the only
+difference between arms is whether the feature group
+(`aod_est`, `radiation_transmittance`, `pbl_suppression_factor`,
+`corrected_pbl_height`, `stability_coupling_index`, `feedback_multiplier`) is in
+the design matrix. Because the split and evaluation rows are identical, the
+metric delta is attributable to the feature group rather than to a re-rolled
+split.
+
+```
+Δ = metric(with coupling) − metric(without coupling)
+```
+
+Sign is read against the metric: for MAE/RMSE (lower is better) a **negative**
+Δ means the features helped; for R² (higher is better) a **positive** Δ means
+they helped. Differences below `MATERIALITY_FRACTION = 0.5%` of the
+without-coupling metric are reported as **no material change** rather than as a
+positive contribution, because two fits of the same model differ slightly for
+reasons unrelated to the features.
+
+Measured (RandomForest, pm2.5, 21,299-row test split, reproduce with
+`python scripts/run_coupling_ablation.py`):
+
+| Horizon | MAE with | MAE without | Δ MAE | Δ % | R² Δ | Verdict |
+|---------|----------|-------------|-------|-----|------|---------|
+| t+6h  | 34.729 | 34.770 | −0.041 | −0.12% | −0.0005 | no material change |
+| t+24h | 41.364 | 42.510 | −1.146 | −2.70% | +0.0307 | material improvement |
+
+The experiment trains throwaway models in memory and writes only a JSON report
+(`reports/coupling_ablation_pm25.json`); it does not modify the shipped models
+or the live API. Single seed and one model type: the t+6 h null result is within
+fit-to-fit variation and would need a multi-seed run to be stated as firmly as
+t+24 h.
 
 ## 12. Spatial forecast (`backend/app/services/grid_service.py`)
 

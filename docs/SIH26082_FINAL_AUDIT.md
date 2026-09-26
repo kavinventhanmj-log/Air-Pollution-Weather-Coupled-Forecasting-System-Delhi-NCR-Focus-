@@ -17,14 +17,18 @@ Full requirement-level table: [`docs/SIH26082_IMPLEMENTATION_AUDIT.md`](SIH26082
 
 Summary of the 24 capability rows:
 
-- **IMPLEMENTED (23/24)** — two-way surrogate coupling, 9 coupling features, forward path,
+- **IMPLEMENTED (23/24)** — two-way surrogate coupling (now *measured* by a paired
+  feature-group ablation, § J), 9 coupling features, forward path,
   backward path, coupled loop, coupling-state persistence, 72h multi-pollutant forecasting,
-  direct PM2.5 + conformal intervals, vertical pressure data (4 levels), lapse-rate inversion,
+  direct PM2.5 + conformal intervals, vertical pressure data (4 levels), lapse-rate inversion
+  with layer geometry (base/top height, thickness) and episode duration/persistence (§ F),
   PBL classification, fire features + transport pathway, 500 km ring + modelling domain,
   dispersion surrogate, GRU evaluation, CPCB/Open-Meteo/FIRMS ingestion, Indian AQI,
   SHAP explainability, alert engine (30 unit tests), chronological validation, dashboard/maps.
 - **PARTIALLY IMPLEMENTED (1/24)** — real-engine WRF-Chem/HYSPLIT *run* (adapter contract and
   binaries/gating implemented; a live run requires operator-provided engine output by design).
+- **Section-level `PARTIALLY IMPLEMENTED` (§ C, E, I, J)** — each names the exact boundary: the
+  closure is analytic rather than physical, and that difference is stated, not hidden.
 
 ## B. Scientific methodology
 
@@ -65,12 +69,32 @@ implemented).
 
 ## F. Inversion implementation
 
-`PARTIALLY IMPLEMENTED` — Vertical temperature gradient (dT/dp × 100 K/100 hPa) over stored
+`FULLY IMPLEMENTED` — Vertical temperature gradient (dT/dp × 100 K/100 hPa) over stored
 1000/925/850/700 hPa layers; category NO/WEAK/MODERATE/STRONG with documented thresholds;
 strength 0..1 ramp; documented PBL-height proxy fallback labelled `pbl_proxy` with a UMD-quality
-"vertical profile unavailable — estimate limited" note. Not implemented: inversion *base/top
-height, thickness, duration and persistence hours* over continuous time (requires a multi-day
-vertical archive the dataset does not currently store), and multi-level live ERA5 ingestion.
+"vertical profile unavailable — estimate limited" note.
+
+**Layer geometry.** Inversion base/top *height* (m) and *thickness* (m and hPa) are now computed
+for the strongest layer. Heights come from real geopotential heights when the feed supplies them
+(`geopotential_height_925hPa` / `_850hPa`), otherwise from the hypsometric equation
+`dz = (R_d·T̄/g)·ln(p_ref/p)` integrated upward from the 1000 hPa level using each layer's mean
+temperature (`ml/features/atmospheric_profile.py`: `pressure_to_height_m`, `layer_heights_m`). A
+supplied height anchors that level and the levels above it are integrated from it. When the PBL
+proxy is used there is no profile, so the fields are `null` rather than fabricated. Thickness in
+hPa is exactly the pressure span of the layer; thickness in m is the height difference.
+
+**Duration and persistence.** `summarise_inversion_episode`
+(`ml/features/inversion.py`) measures the current episode over the stored hourly history:
+`current_duration_h` is the unbroken run of inversion samples ending at the latest reading
+(a sampling gap > 3 h breaks the run and the gap is *not* added to the duration, because nothing
+was observed during it), and `persistence_fraction` is the share of the trailing 24 h window that
+is inverted. The response also carries `measured_window_h`, `inversion_episode_samples` and
+`inversion_history_sufficient` so a short archive can never be presented as a long episode — the
+48 h history query is bounded and the disclosure is computed from what was actually read.
+
+`GET /api/inversion/{station}` returns all of the above. Not implemented, and out of scope of the
+code: multi-level live ERA5 pressure-level ingestion (the archive is seeded, not ingested live),
+and a probabilistic confidence on the episode statistics.
 
 ## G. PBL implementation
 
@@ -105,6 +129,27 @@ covered by `TestCouplingFeedback`. It is an **analytic/data-driven closure**, no
 radiative transfer — classification is `PARTIALLY IMPLEMENTED` for the physical-coupling claim,
 `FULLY` for the surrogate's own functionality. Lagged pollution values are used; no future leakage.
 
+**The coupling features are now measured, not just present.** `ml/evaluation/ablation.py`
+(`run_coupling_ablation`) trains the same model twice on the *same* chronological split — once
+with the six coupling features (`aod_est`, `radiation_transmittance`, `pbl_suppression_factor`,
+`corrected_pbl_height`, `stability_coupling_index`, `feedback_multiplier`) and once without — and
+reports paired held-out test metrics. Only the feature matrix differs between arms, so the metric
+delta is attributable to the feature group. Reproduce with
+`python scripts/run_coupling_ablation.py` (report written to `reports/coupling_ablation_pm25.json`).
+
+Measured on the real `featured_dataset.csv` (RandomForest, pm2.5, 21,299-row chronological test
+split, identical 50,669/12,926/21,299 train/val/test boundaries in both arms):
+
+| Horizon | MAE with | MAE without | Δ MAE | Δ % | R² Δ | Material? |
+|---------|----------|-------------|-------|-----|------|-----------|
+| t+6h  | 34.729 | 34.770 | −0.041 | −0.12% | −0.0005 | no (below 0.5% threshold) |
+| t+24h | 41.364 | 42.510 | −1.146 | −2.70% | +0.031 | yes |
+
+So the coupling features **do** add predictive value at t+24 h and are **not measurable** at t+6 h.
+The report states both directions, and a difference below 0.5% is reported as "no material
+change" rather than as a positive contribution — two RandomForest fits differ slightly for reasons
+unrelated to the features. The experiment does not touch the shipped models or the live API.
+
 ## K. Dashboard functionality
 
 `FULLY IMPLEMENTED` — Operational layout: current AQI, 72h max forecast AQI, PM2.5, O3, PBLH,
@@ -114,9 +159,10 @@ SystemStatus + About + GRAP panels. Alerts phrased as risk ("expected", "risk") 
 
 ## L. Testing results
 
-`FULLY IMPLEMENTED` — **635 tests passed**, `ruff check backend/app backend/tests` clean,
-`ruff check ml` clean, `tsc --noEmit` clean, `vite build` clean. Coverage includes AQI, inversion,
-PBLH handling, wind-vector (u/v), dispersion solver, fire influence, coupling engine, forecast
+`FULLY IMPLEMENTED` — **748 tests passed** (635 when this audit was written, 664 before this
+revision), `ruff check backend ml scripts` clean, `tsc --noEmit` clean, `vite build` clean.
+Coverage includes AQI, inversion geometry + episode statistics, PBLH handling, wind-vector (u/v),
+dispersion solver, fire influence, coupling engine, coupling-feature ablation, forecast
 generation, 72h output, time-series split, data-leakage prevention and API validation. See
 [§ L] rows in IMPLEMENTATION_AUDIT for the verification table.
 
@@ -137,21 +183,29 @@ stations; no unbounded payloads returned to the dashboard (horizon-limited APIs)
 
 ## O. Known limitations
 
-1. Vertical archive is 4 pressure levels only (1000/925/850/700 hPa) — no multi-day vertical
-   profile → inversion thickness/persistence/duration not yet computed.
+1. Vertical archive is 4 pressure levels only (1000/925/850/700 hPa). Inversion geometry and
+   duration/persistence are computed from it, but the archive is seeded rather than ingested live,
+   so episode statistics are bounded by whatever history exists — the response discloses the
+   measured window and marks a short history as insufficient.
 2. ERA5 live (multi-level) and IMD live are credential-gated; ERA5 reanalysis offline only.
 3. Coupling feedback and fire transport are **surrogates/estimates**; no physical WRF-Chem run.
+   The coupling surrogate's own predictive contribution is now measured (§ J): material at t+24 h,
+   not measurable at t+6 h.
 4. Long-horizon NO₂/SO₂ skill is modest (≈0.21/0.15 R² @72h); uncertainty shown where computed.
 5. GRU is evaluated but not the serving model (XGBoost is); documented honestly.
 6. Model metrics reflect the most recent chronological evaluation run only.
+7. The ablation uses a single seed and one model type (RandomForest); the t+6h null result is within
+   fit-to-fit variation and a multi-seed run would be needed to state it as firmly as t+24h.
 
 ## P. Future improvements
 
-1. Multi-day vertical ERA5 archive → inversion base/top/thickness/duration/persistence + confidence.
+1. Multi-level live vertical ERA5 ingestion so episode statistics rest on a continuously
+   archived profile, plus a confidence measure on the episode statistics.
 2. Operator-deployed WRF-Chem/HYSPLIT consumption through the existing gated adapters.
 3. Live IMD / ERA5-CDS ingestion with credential gate already in place.
 4. Ensemble spread + quantile regression as extra uncertainty methods beside split-conformal.
 5. Rate limiting and staged public-key read endpoints before any non-hackathon operation.
+6. Multi-seed / multi-model ablation to firm up the per-horizon coupling verdicts.
 
 ---
 

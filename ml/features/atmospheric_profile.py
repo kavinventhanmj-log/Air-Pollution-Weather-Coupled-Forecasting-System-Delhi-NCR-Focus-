@@ -46,6 +46,87 @@ PBL_MODERATE_M = 300.0
 PBL_WEAK_M = 500.0
 PBL_CLIMATOLOGICAL_DEFAULT_M = 600.0
 
+# --- Height geometry -------------------------------------------------------
+#: Specific gas constant for dry air, J/(kg K) (ICAO standard atmosphere).
+R_DRY_AIR_J_KG_K = 287.05
+#: Standard gravity, m/s^2.
+GRAVITY_M_S2 = 9.80665
+#: Reference pressure the height integration starts from when the profile does
+#: not carry real geopotential heights: the 1000 hPa level.
+HEIGHT_REFERENCE_HPA = 1000.0
+
+
+def pressure_to_height_m(p_hPa: float, t_layer_c: float) -> float | None:
+    """Height (m) of a pressure level above a reference, via the hypsometric equation.
+
+    The layer-mean temperature is treated as constant over the layer, which is
+    the standard first-order hypsometric approximation::
+
+        dz = (R_d * T_mean / g) * ln(p_ref / p)
+
+    Returns ``None`` for non-physical input rather than guessing, so a bad
+    profile is visible as missing geometry instead of a plausible number.
+    """
+    if p_hPa is None or t_layer_c is None:
+        return None
+    try:
+        p = float(p_hPa)
+        t_mean_k = float(t_layer_c) + 273.15
+    except (TypeError, ValueError):
+        return None
+    if not (p > 0) or t_mean_k <= 0:
+        return None
+    if p >= HEIGHT_REFERENCE_HPA:
+        # At or below the reference level the height is zero by definition.
+        return 0.0 if p == HEIGHT_REFERENCE_HPA else None
+    return float((R_DRY_AIR_J_KG_K * t_mean_k / GRAVITY_M_S2) * np.log(HEIGHT_REFERENCE_HPA / p))
+
+
+def layer_heights_m(
+    temp_by_level: dict[float, float],
+    height_by_level: dict[float, float] | None = None,
+) -> dict[float, float]:
+    """Geometric height (m) for each pressure level in a vertical profile.
+
+    Real geopotential heights from the reanalysis/forecast feed win when
+    present. Otherwise heights are integrated upward from
+    :data:`HEIGHT_REFERENCE_HPA` with the hypsometric equation, so with the full
+    1000/925/850/700 hPa profile the numbers are heights above the 1000 hPa
+    level. If 1000 hPa itself is missing, the lowest available level becomes the
+    reference and the returned heights are relative to it -- the caller sees a
+    depth, not an altitude, which is what the layer analysis needs anyway.
+    """
+    heights: dict[float, float] = {}
+    supplied = {float(p): float(h) for p, h in (height_by_level or {}).items()
+                if h is not None and not (isinstance(h, float) and np.isnan(h))}
+    temps = {float(p): float(t) for p, t in (temp_by_level or {}).items() if t is not None}
+    if len(temps) < 2:
+        # A single level carries no layer information, so there is no geometry
+        # to report. Any real heights the feed supplied are still returned.
+        return dict(supplied)
+
+    # Walk from the lowest level upward (decreasing pressure). A supplied
+    # geopotential height anchors that level; the rest are integrated from it,
+    # so a partially-populated feed still yields a full profile.
+    levels = sorted(temps, reverse=True)
+    for i, p in enumerate(levels):
+        if p in supplied:
+            heights[p] = supplied[p]
+        elif i == 0:
+            # Reference level: zero by definition when it is the 1000 hPa
+            # surface. If the profile starts higher up, heights become depths
+            # relative to the lowest observed level.
+            heights[p] = 0.0
+        else:
+            p_base = levels[i - 1]
+            t_mean = (temps[p_base] + temps[p]) / 2.0
+            dz = (R_DRY_AIR_J_KG_K * (t_mean + 273.15) / GRAVITY_M_S2) * np.log(p_base / p)
+            heights[p] = heights.get(p_base, 0.0) + float(dz)
+    # Levels that carry a real height but no temperature keep it.
+    for p, h in supplied.items():
+        heights.setdefault(p, h)
+    return heights
+
 
 def _level_pairs(levels_hpa: list[float]) -> list[tuple[float, float]]:
     """Return adjacent (base_pressure, top_pressure) pairs.
@@ -103,7 +184,11 @@ def compute_lapse_rates(temp_by_level: dict[float, float]) -> dict[tuple[float, 
     return grades
 
 
-def classify_gradient(gradients: dict[tuple[float, float], float]) -> dict[str, object]:
+def classify_gradient(
+    gradients: dict[tuple[float, float], float],
+    temp_by_level: dict[float, float] | None = None,
+    height_by_level: dict[float, float] | None = None,
+) -> dict[str, object]:
     """Classify inversion from a set of layer gradients.
 
     Returns a dict with:
@@ -112,6 +197,10 @@ def classify_gradient(gradients: dict[tuple[float, float], float]) -> dict[str, 
       - inversion_category       : none / weak / moderate / strong
       - inversion_base_pressure  : hPa or None
       - inversion_top_pressure   : hPa or None
+      - inversion_base_height_m  : m or None  (hypsometric / geopotential)
+      - inversion_top_height_m   : m or None
+      - inversion_thickness_m    : m or None   (top height - base height)
+      - inversion_thickness_hpa  : hPa or None (base pressure - top pressure)
       - strongest_layer_gradient : K/100 hPa of the strongest (most negative
                                    stability) layer, or None
       - profile_available        : bool (>=2 levels)
@@ -123,6 +212,10 @@ def classify_gradient(gradients: dict[tuple[float, float], float]) -> dict[str, 
             "inversion_category": "none",
             "inversion_base_pressure": None,
             "inversion_top_pressure": None,
+            "inversion_base_height_m": None,
+            "inversion_top_height_m": None,
+            "inversion_thickness_m": None,
+            "inversion_thickness_hpa": None,
             "strongest_layer_gradient": None,
             "profile_available": False,
         }
@@ -144,12 +237,28 @@ def classify_gradient(gradients: dict[tuple[float, float], float]) -> dict[str, 
     # physically strong cap (e.g. 4 K/100 hPa).
     strength = np.clip((gmax - WEAK_INVERSION_THRESHOLD_K) / (4.0 - WEAK_INVERSION_THRESHOLD_K), 0.0, 1.0)
 
+    # --- Geometry: how deep the trapping layer sits and how thick it is. ---
+    # The audit listed base/top *height* and thickness as unimplemented because
+    # only the pressures were reported. Both are derivable from the profile
+    # itself, so they are computed here rather than deferred to a future archive.
+    heights = layer_heights_m(temp_by_level or {}, height_by_level)
+    base_h = heights.get(float(base_p))
+    top_h = heights.get(float(top_p))
+    thickness_m = None
+    if base_h is not None and top_h is not None:
+        thickness_m = round(float(top_h - base_h), 1)
+    thickness_hpa = round(float(base_p - top_p), 1)
+
     return {
         "inversion_detected": category != "none",
         "inversion_strength": round(float(strength), 4),
         "inversion_category": category,
         "inversion_base_pressure": base_p,
         "inversion_top_pressure": top_p,
+        "inversion_base_height_m": None if base_h is None else round(float(base_h), 1),
+        "inversion_top_height_m": None if top_h is None else round(float(top_h), 1),
+        "inversion_thickness_m": thickness_m,
+        "inversion_thickness_hpa": thickness_hpa,
         "strongest_layer_gradient": round(gmax, 4),
         "profile_available": True,
     }
@@ -204,6 +313,7 @@ def combine_inversion(
     pbl_height: float | None,
     temp_by_level: dict[float, float] | None,
     *,
+    height_by_level: dict[float, float] | None = None,
     pbl_valid: tuple[float, float] | None = None,
 ) -> dict[str, object]:
     """Combine vertical lapse-rate and PBL-proxy inversion status.
@@ -215,7 +325,7 @@ def combine_inversion(
     Returns a flat dict with keys from classify_gradient()/classify_pbl() plus
     ``inversion_source``.
     """
-    res = classify_gradient(compute_lapse_rates(temp_by_level or {}))
+    res = classify_gradient(compute_lapse_rates(temp_by_level or {}), temp_by_level, height_by_level)
     pbl = classify_pbl(pbl_height, pbl_valid=pbl_valid)
 
     if res["profile_available"]:
@@ -242,6 +352,12 @@ def combine_inversion(
             "inversion_category": cat,
             "inversion_base_pressure": None,
             "inversion_top_pressure": None,
+            # No vertical profile means no defensible geometry. Reporting a
+            # thickness here would be inventing a number.
+            "inversion_base_height_m": None,
+            "inversion_top_height_m": None,
+            "inversion_thickness_m": None,
+            "inversion_thickness_hpa": None,
             "strongest_layer_gradient": None,
             "profile_available": False,
             "inversion_source": "pbl_proxy",

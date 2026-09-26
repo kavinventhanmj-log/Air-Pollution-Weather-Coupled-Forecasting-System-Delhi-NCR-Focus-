@@ -4,7 +4,6 @@ The cache is intentionally bypassed on SQLite (tests/local), so these cases
 force ``_cache_enabled`` on and exercise the TTL + invalidation behaviour
 directly.
 """
-import time
 
 from app.services import ttl_cache
 
@@ -25,6 +24,36 @@ def test_cached_builds_once_until_ttl(monkeypatch):
 
 
 def test_cached_rebuilds_after_ttl_expiry(monkeypatch):
+    """Expiry is driven by an injected clock, not a real sleep.
+
+    A previous version slept 60 ms against a 50 ms TTL. That 10 ms margin is
+    inside the Windows ~15.6 ms timer granularity, so the sleep could return
+    before the TTL had actually elapsed and the case failed roughly 1 run in 6.
+    """
+    monkeypatch.setattr(ttl_cache, "_cache_enabled", lambda: True)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(ttl_cache.time, "monotonic", lambda: clock["now"])
+    builds = {"n": 0}
+
+    def builder():
+        builds["n"] += 1
+        return builds["n"]
+
+    assert ttl_cache.cached("k2", 60, builder) == 1
+
+    # Just inside the TTL: still cached.
+    clock["now"] += 59.0
+    assert ttl_cache.cached("k2", 60, builder) == 1
+    assert builds["n"] == 1
+
+    # Past the TTL: rebuilt.
+    clock["now"] += 2.0
+    assert ttl_cache.cached("k2", 60, builder) == 2
+    assert builds["n"] == 2
+
+
+def test_cached_rebuilds_after_zero_ttl(monkeypatch):
+    """A zero TTL never serves a stale value, with no timing dependency."""
     monkeypatch.setattr(ttl_cache, "_cache_enabled", lambda: True)
     builds = {"n": 0}
 
@@ -32,9 +61,9 @@ def test_cached_rebuilds_after_ttl_expiry(monkeypatch):
         builds["n"] += 1
         return builds["n"]
 
-    assert ttl_cache.cached("k2", 0.05, builder) == 1
-    time.sleep(0.06)
-    assert ttl_cache.cached("k2", 0.05, builder) == 2
+    assert ttl_cache.cached("k-zero", 0, builder) == 1
+    assert ttl_cache.cached("k-zero", 0, builder) == 2
+    assert builds["n"] == 2
 
 
 def test_cached_distinguishes_keys(monkeypatch):

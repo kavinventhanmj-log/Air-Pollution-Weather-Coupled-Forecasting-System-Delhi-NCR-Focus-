@@ -40,7 +40,7 @@ Phase 19/20 coupling-status + flow additions described at the end.
 - **Auth (JWT + demo), CORS via env, Pydantic validation** — no keys in source.
 - **Dashboard, maps, 72h page, atmosphere, transport, alerts, performance, spatial outlook,
   scenario, data & methodology** pages (all with Loading/Error/Empty states).
-- **664 tests passing** — AQI, inversion, PBL, wind vectors, dispersion, fire, coupling,
+- **748 tests passing** — AQI, inversion, PBL, wind vectors, dispersion, fire, coupling,
   forecast pipeline, time-series split, leakage checks, API validation.
 
 ## 2. Partially implemented (honest boundaries)

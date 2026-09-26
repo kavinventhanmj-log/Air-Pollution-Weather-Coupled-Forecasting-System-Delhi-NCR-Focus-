@@ -243,6 +243,34 @@ def test_get_inversion(client, db_session):
     assert body["inversion_strength"] == "Moderate"
 
 
+def test_get_inversion_reports_geometry_fields(client, db_session):
+    """Layer geometry is always present in the contract, even when null."""
+    body = client.get("/api/inversion/Anand Vihar").json()
+    for field in (
+        "inversion_base_height_m",
+        "inversion_top_height_m",
+        "inversion_thickness_m",
+        "inversion_thickness_hpa",
+    ):
+        assert field in body
+    # Seeded rows carry no pressure-level profile, so the PBL proxy is used and
+    # must not invent a thickness.
+    assert body["inversion_source"] == "pbl_proxy"
+    assert body["inversion_thickness_m"] is None
+
+
+def test_get_inversion_reports_duration_and_persistence(client, db_session):
+    body = client.get("/api/inversion/Anand Vihar").json()
+    assert body["inversion_duration_h"] >= 0.0
+    assert body["inversion_persistence_window_h"] == 24
+    assert body["inversion_measured_window_h"] > 0.0
+    assert body["inversion_episode_samples"] == 12
+    # 12 hourly readings is an 11 h span, which cannot support a 24 h claim and
+    # the response must say so rather than implying a full day was observed.
+    assert body["inversion_history_sufficient"] is False
+    assert body["inversion_persistence"] is not None
+
+
 def test_get_inversion_not_found(client, db_session):
     response = client.get("/api/inversion/Faridabad")
     assert response.status_code == 404

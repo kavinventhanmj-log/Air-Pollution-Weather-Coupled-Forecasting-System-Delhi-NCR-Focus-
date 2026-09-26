@@ -21,6 +21,7 @@
 | # | Capability | Status | Implementation / evidence | Remaining limitation |
 |---|------------|--------|---------------------------|----------------------|
 | 1 | **Two-way air pollution ↔ weather coupling** (chemistry→meteorology: AOD → radiation transmittance → PBL suppression → stability/coupling index; meteorology→chemistry: features feed forecasters) | IMPLEMENTED | `ml/features/coupling.py`, `ml/features/coupled_loop.py`, `backend/app/api/coupling.py` | Analytic surrogate, not a compiled coupled CTM |
+| 1a | **Coupling feature group measured by ablation** (paired with/without the 6 coupling features on one identical chronological split) | IMPLEMENTED | `ml/evaluation/ablation.py` (`run_coupling_ablation`), `scripts/run_coupling_ablation.py`, `reports/coupling_ablation_pm25.json`, `backend/tests/unit/test_coupling_ablation.py` (32) | t+24 h: MAE 41.364 vs 42.510 (−2.70%, material). t+6 h: −0.12%, below the 0.5% materiality threshold → reported as no material change. Single seed / RandomForest only |
 | 2 | **Nine named coupling features** (dispersion, accumulation, inversion-trapping, stagnation, aerosol-accumulation, fire-transport, regional-transport, ozone-photochemical, meteorology-pollution interaction) | IMPLEMENTED | `ml/features/coupling_engine.py`; computed from stored obs, 0..1 with `basis` string | Features are potentials/tendencies, not measurements |
 | 3 | **Coupling features computed from stored observations only** — never overwriting a measured value, never inventing missing inputs | IMPLEMENTED | `backend/app/services/coupling_service.py` (`get_coupling_inputs` provenance), `backend/tests/unit/test_coupling_engine.py` (15) | `None` reported as "Data unavailable" when inputs missing |
 | 4 | **Meteorology → chemistry forward path** (wind/PBL/inversion/humidity/fire features consumed by the ML forecasters at training + inference) | IMPLEMENTED | `ml/features/feature_engineering.py`, `backend/app/services/forecast_service.py` (`build_features_from_db`) | — |
@@ -31,6 +32,8 @@
 | 9 | **Direct PM2.5 forecast engine** with distribution-free split-conformal prediction intervals + model card + explanation | IMPLEMENTED | `ml/training/train_pm25.py`, `ml/inference/pm25_forecaster.py`, `GET /api/forecast/pm25{,/model-card,/explanation}` | Interval coverage degrades at longer horizons |
 | 10 | **Vertical pressure-level atmospheric data** (1000/925/850/700 hPa temperature + geopotential) per station | IMPLEMENTED | Open-Meteo pressure-level ingestion in `backend/app/services/refresh_service.py`, `WeatherReading` profile columns, `docs/methodology.md` | Very recent archive levels may be NULL → live-forecast supplement; ERA5 (CDS) documented as production upgrade |
 | 11 | **Lapse-rate inversion detection** (`dT/dp × 100` K/100 hPa, `T↑` with height ⇒ inversion; source `lapse_rate \| pbl_proxy`) | IMPLEMENTED | `ml/features/atmospheric_profile.py`, `backend/app/api/inversion.py`, `backend/tests/unit/test_vertical_atmosphere.py` | Grades (1.5/0.6/0.0 K per 100 hPa) are heuristic, stated as such |
+| 11a | **Inversion layer geometry** (base/top height in m, thickness in m and hPa) | IMPLEMENTED | `ml/features/atmospheric_profile.py` (`pressure_to_height_m`, `layer_heights_m`, `classify_gradient`), `backend/app/api/inversion.py` (`_geopotential_by_level`), `backend/tests/unit/test_inversion_geometry.py` | Heights use real geopotential when the feed supplies it, else the hypsometric equation anchored at 1000 hPa; `null` (never fabricated) under the PBL proxy |
+| 11b | **Inversion episode duration & persistence** (current unbroken run in hours, share of trailing 24 h inverted, onset) | IMPLEMENTED | `ml/features/inversion.py` (`summarise_inversion_episode`), `backend/app/api/inversion.py` (`_episode_stats`, `EPISODE_HISTORY_HOURS=48`), `backend/tests/unit/test_inversion_geometry.py`, `backend/tests/unit/test_inversion_api_helpers.py` | Bounded by the stored archive: `inversion_measured_window_h`, `inversion_episode_samples` and `inversion_history_sufficient` disclose what was actually read, and a >3 h sampling gap breaks the run rather than being counted as persistence |
 | 12 | **PBL classification / dispersion condition** (`low_pbl_flag`, `pbl_category`, `dispersion_condition`) | IMPLEMENTED | `ml/features/atmospheric_profile.py` (`classify_pbl`, `combine_inversion`) | Thresholds (150/300/500 m) heuristic |
 | 13 | **Fire (stubble) ingestion + full transport feature set** (fire_count, FRP impact, nearest distance, `wind_alignment_pct`, `transport_time_hours`, `transport_risk` + level, `stubble_impact_score`, 500 km radius, ±90° upwind) | IMPLEMENTED | NASA FIRMS ingestion, `ml/features/fire_impact.py`, `backend/app/api/fire.py`, `docs/SCIENTIFIC_METHODOLOGY.md` §4 | Transport time is an advective estimate (no boundary-layer diffusion) |
 | 14 | **Plume-transport pathway layer on the Leaflet map** (upwind ≤500 km fires ranked by FRP, top-6 dashed corridors, wind vector, "FROM <compass>") | IMPLEMENTED | `frontend/src/lib/geo.ts`, `frontend/src/components/StationMap.tsx`, `NCRMap.tsx`, `StubblePlumePage.tsx` | Straight-line advective corridor, not a dispersion result |
@@ -54,7 +57,7 @@ IMPLEMENTED`, 0 `NOT AVAILABLE`.
 
 | Check | Command | Result |
 |-------|---------|--------|
-| Full backend suite | `python -m pytest backend/tests -q` | **635 passed** |
+| Full backend suite | `python -m pytest backend/tests -q` | **748 passed** |
 | CI lint scope | `python -m ruff check backend/app backend/tests` | All checks passed |
 | ML module lint (town fix) | `python -m ruff check ml` | All checks passed (pre-existing B023/F841 fixed) |
 | Coupling-state + features API | `python -m pytest backend/tests/test_coupling_state.py backend/tests/test_coupling_features_api.py -q` | 14 passed |
@@ -81,7 +84,7 @@ IMPLEMENTED`, 0 `NOT AVAILABLE`.
 - `frontend/src/components/StationMap.tsx` — influence ring + modelling-boundary polygon + map a11y (`keyboard={false}` removed).
 - `frontend/src/pages/Forecast72h.tsx` — humidity/pressure columns, uncertainty disclosure, chart/table a11y.
 - `frontend/src/components/AlertList.tsx` — severity text badges + missing ADVISORY level styling.
-- `README.md` — SIH 2026, coupling-state API rows, scientific limitations, test count 635.
+- `README.md` — SIH 2026, coupling-state API rows, scientific limitations, test count 748.
 - `CHANGELOG.md` — 1.10.0 entry. `ml/preprocessing/training_dataset.py`, `ml/training/evaluate_pm25.py` — lint fixes.
 - `docs/SIH26082_IMPLEMENTATION_AUDIT.md` — this file.
 

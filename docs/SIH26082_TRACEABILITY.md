@@ -64,7 +64,7 @@
 ## Verification run used to produce this matrix
 
 ```bash
-python -m pytest backend/tests -q                    # 635 passed
+python -m pytest backend/tests -q                    # 748 passed
 python -m ruff check backend/app backend/tests ml     # clean
 cd frontend && npx tsc --noEmit && npx vite build     # clean
 ```

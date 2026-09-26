@@ -29,6 +29,6 @@ This is documented transparently in `docs/methodology.md` §9.
 ## Regression verification
 
 ```bash
-python -m pytest backend/tests -q    # 664 tests green
+python -m pytest backend/tests -q    # 748 tests green
 cd frontend && npm run build          # type-checked production build
 ```

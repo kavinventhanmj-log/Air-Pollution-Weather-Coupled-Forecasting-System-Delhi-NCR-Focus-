@@ -3,6 +3,74 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.17.0] - 2026-09
+
+### Added (inversion layer geometry, episode duration/persistence, and a measured coupling ablation)
+
+Closes the two implementation partials recorded in `docs/SIH26082_FINAL_AUDIT.md`:
+inversion **base/top height, thickness, duration and persistence** were listed as
+"not implemented — requires a multi-day vertical archive", and the two-way coupling
+features were present but never measured. Both are now implemented, and the coupling
+claim is backed by a number rather than an assertion.
+
+**Inversion layer geometry.** `ml/features/atmospheric_profile.py` gained
+`pressure_to_height_m` (hypsometric, `dz = (R_d·T̄/g)·ln(p_ref/p)`, with
+`R_d = 287.05 J kg⁻¹ K⁻¹` and `g = 9.80665 m s⁻²`) and `layer_heights_m`, which
+prefers real geopotential heights and otherwise integrates upward from 1000 hPa
+using each layer's mean temperature. `classify_gradient` and `combine_inversion` now
+report `inversion_base_height_m`, `inversion_top_height_m`, `inversion_thickness_m`
+and `inversion_thickness_hpa` for the strongest layer. `add_lapse_rate_inversion_features`
+carries the same columns into the training matrix.
+
+**Inversion episode statistics.** `summarise_inversion_episode`
+(`ml/features/inversion.py`) measures the current episode over the stored hourly
+history: `current_duration_h` for the unbroken run of inversion samples and
+`persistence_fraction` over the trailing 24 h. A sampling gap > 3 h
+(`EPISODE_GAP_TOLERANCE_H`) breaks the run and the gap is *not* added to the
+duration, because nothing was observed during it. `GET /api/inversion/{station}`
+returns `inversion_duration_h`, `inversion_persistence`,
+`inversion_persistence_window_h`, `inversion_measured_window_h`,
+`inversion_episode_samples`, `inversion_episode_onset` and
+`inversion_history_sufficient` (48 h bounded history query), so a short archive can
+never be presented as a long episode. Geometry and duration are `null` under the
+PBL proxy rather than fabricated.
+
+**Coupling ablation.** `ml/evaluation/ablation.py` (`run_coupling_ablation`) fits
+the same model twice on one identical chronological split — with and without the six
+coupling features — selecting on validation and scoring paired held-out test rows.
+Reproduce with `python scripts/run_coupling_ablation.py`. Measured on the real
+`featured_dataset.csv` (RandomForest, pm2.5, 21,299-row test split):
+
+| Horizon | MAE with | MAE without | Δ MAE | Δ % | Verdict |
+|---------|----------|-------------|-------|-----|---------|
+| t+6h  | 34.729 | 34.770 | −0.041 | −0.12% | no material change |
+| t+24h | 41.364 | 42.510 | −1.146 | −2.70% | material improvement |
+
+The report names the direction of the effect in both cases. Because two fits of the
+same model differ slightly for reasons unrelated to the features, a difference below
+`MATERIALITY_FRACTION = 0.5%` is reported as **no material change** instead of a
+positive contribution — which is why the t+6 h result is not claimed as support. The
+ablation trains throwaway models and writes only `reports/coupling_ablation_pm25.json`;
+shipped models and the live API are untouched.
+
+### Fixed (flaky TTL cache test)
+`test_cached_rebuilds_after_ttl_expiry` slept 60 ms against a 50 ms TTL. That 10 ms
+margin sits inside the Windows ~15.6 ms timer granularity, so the case failed roughly
+1 run in 6 in full-suite runs. It now drives `ttl_cache.time.monotonic` with an
+injected clock and asserts both the inside-TTL and past-TTL cases, with no sleep and
+no timing dependency. 12/12 consecutive runs green.
+
+### Changed
+- `docs/SIH26082_FINAL_AUDIT.md` § F moves from `PARTIALLY IMPLEMENTED` to
+  `FULLY IMPLEMENTED` (geometry + episode statistics now computed and exposed), with
+  the two genuinely remaining gaps named: live multi-level ERA5 pressure-level
+  ingestion, and a confidence measure on the episode statistics.
+- `docs/SIH26082_FINAL_AUDIT.md` § J and `docs/SCIENTIFIC_METHODOLOGY.md` § 11.1 gain
+  the measured ablation table; known-limitations list the single-seed caveat.
+- Test count 664 → **748** (`backend/tests/unit/test_inversion_geometry.py` 32,
+  `test_inversion_api_helpers.py` 22, `test_coupling_ablation.py` 32, plus API and TTL
+  coverage). `ruff check backend ml scripts` clean.
+
 ## [1.16.0] - 2026-09
 
 ### Fixed (dead panels on a cold start: "Atmospheric profile unavailable", "No active alerts", an empty verification chart)

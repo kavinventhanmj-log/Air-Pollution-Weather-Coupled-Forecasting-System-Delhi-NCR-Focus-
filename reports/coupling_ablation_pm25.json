@@ -1,0 +1,157 @@
+{
+  "target": "pm25",
+  "model_type": "random_forest",
+  "horizons": [
+    6,
+    24
+  ],
+  "group": [
+    "aod_est",
+    "radiation_transmittance",
+    "pbl_suppression_factor",
+    "corrected_pbl_height",
+    "stability_coupling_index",
+    "feedback_multiplier"
+  ],
+  "group_present": [
+    "aod_est",
+    "radiation_transmittance",
+    "pbl_suppression_factor",
+    "corrected_pbl_height",
+    "stability_coupling_index",
+    "feedback_multiplier"
+  ],
+  "group_absent": [],
+  "protocol": {
+    "split": "chronological_by_time",
+    "train_ratio": 0.6,
+    "val_ratio": 0.15,
+    "selection": "validation",
+    "evaluation": "held-out test",
+    "paired": true
+  },
+  "arms": {
+    "t+6h": {
+      "status": "ok",
+      "with": {
+        "val": {
+          "mae": 25.592969882945482,
+          "rmse": 40.51068430020155,
+          "r2": 0.2141900448169003,
+          "mape": 57.262419321173375,
+          "nmae": 0.37981058687825214
+        },
+        "test": {
+          "mae": 34.72931322267455,
+          "rmse": 57.67265504429014,
+          "r2": 0.7703834523199875,
+          "mape": 62.949163059570864,
+          "nmae": 0.2845879064039631
+        },
+        "n_train": 50082,
+        "n_test": 21080,
+        "n_features": 114
+      },
+      "without": {
+        "val": {
+          "mae": 25.56212769180086,
+          "rmse": 40.44107260366589,
+          "r2": 0.21688832388836898,
+          "mape": 56.9802855669237,
+          "nmae": 0.37935287560938313
+        },
+        "test": {
+          "mae": 34.7697931494146,
+          "rmse": 57.61054867349245,
+          "r2": 0.7708777237196813,
+          "mape": 62.93282963049809,
+          "nmae": 0.2849196174726063
+        },
+        "n_train": 50082,
+        "n_test": 21080,
+        "n_features": 108
+      },
+      "delta": {
+        "mae": -0.0405,
+        "rmse": 0.0621,
+        "r2": -0.0005,
+        "mae_relative": 0.001165,
+        "material": false
+      }
+    },
+    "t+24h": {
+      "status": "ok",
+      "with": {
+        "val": {
+          "mae": 26.473097171793327,
+          "rmse": 41.45938452411182,
+          "r2": 0.1817674735892184,
+          "mape": 60.71112673860597,
+          "nmae": 0.39241939631908673
+        },
+        "test": {
+          "mae": 41.36431158454049,
+          "rmse": 68.61806437679971,
+          "r2": 0.6772743275163386,
+          "mape": 70.47957975488086,
+          "nmae": 0.33679153701418363
+        },
+        "n_train": 49609,
+        "n_test": 20863,
+        "n_features": 114
+      },
+      "without": {
+        "val": {
+          "mae": 26.096157116315545,
+          "rmse": 41.34521737299856,
+          "r2": 0.18626762033455602,
+          "mape": 59.14691249423378,
+          "nmae": 0.3868318903291688
+        },
+        "test": {
+          "mae": 42.50996617734713,
+          "rmse": 71.80414527488557,
+          "r2": 0.6466088882640557,
+          "mape": 71.86537749382472,
+          "nmae": 0.34611954844283055
+        },
+        "n_train": 49609,
+        "n_test": 20863,
+        "n_features": 108
+      },
+      "delta": {
+        "mae": -1.1457,
+        "rmse": -3.1861,
+        "r2": 0.0307,
+        "mae_relative": 0.026951,
+        "material": true
+      }
+    }
+  },
+  "delta": {
+    "t+6h": {
+      "mae": -0.0405,
+      "rmse": 0.0621,
+      "r2": -0.0005,
+      "mae_relative": 0.001165,
+      "material": false
+    },
+    "t+24h": {
+      "mae": -1.1457,
+      "rmse": -3.1861,
+      "r2": 0.0307,
+      "mae_relative": 0.026951,
+      "material": true
+    }
+  },
+  "summaries": {
+    "t+6h": "Coupling ablation: pm25 t+6h (random_forest), chronological test split\n  with coupling    MAE=34.72931322267455  RMSE=57.67265504429014  R2=0.7703834523199875\n  without coupling MAE=34.7697931494146  RMSE=57.61054867349245  R2=0.7708777237196813\n  effect: no material change -- MAE differs by 0.0405 (0.116% of the without-coupling MAE), below the 0.5% threshold, so the coupling features are not demonstrably adding predictive value on this split\n  R2 is lower with coupling (delta with-minus-without = -0.0005)",
+    "t+24h": "Coupling ablation: pm25 t+24h (random_forest), chronological test split\n  with coupling    MAE=41.36431158454049  RMSE=68.61806437679971  R2=0.6772743275163386\n  without coupling MAE=42.50996617734713  RMSE=71.80414527488557  R2=0.6466088882640557\n  effect: MAE is 1.1457 (2.70%) LOWER with the coupling features -> they help on this split\n  R2 is higher with coupling (delta with-minus-without = 0.0307)"
+  },
+  "summary": "Coupling ablation: pm25 t+6h (random_forest), chronological test split\n  with coupling    MAE=34.72931322267455  RMSE=57.67265504429014  R2=0.7703834523199875\n  without coupling MAE=34.7697931494146  RMSE=57.61054867349245  R2=0.7708777237196813\n  effect: no material change -- MAE differs by 0.0405 (0.116% of the without-coupling MAE), below the 0.5% threshold, so the coupling features are not demonstrably adding predictive value on this split\n  R2 is lower with coupling (delta with-minus-without = -0.0005)\n\nCoupling ablation: pm25 t+24h (random_forest), chronological test split\n  with coupling    MAE=41.36431158454049  RMSE=68.61806437679971  R2=0.6772743275163386\n  without coupling MAE=42.50996617734713  RMSE=71.80414527488557  R2=0.6466088882640557\n  effect: MAE is 1.1457 (2.70%) LOWER with the coupling features -> they help on this split\n  R2 is higher with coupling (delta with-minus-without = 0.0307)",
+  "material_horizons": [
+    "t+24h"
+  ],
+  "verdict": "Coupling features materially improve held-out MAE at t+24h; no measurable effect at t+6h.",
+  "computed_at": "2026-09-26T20:46:55.229888+00:00"
+}

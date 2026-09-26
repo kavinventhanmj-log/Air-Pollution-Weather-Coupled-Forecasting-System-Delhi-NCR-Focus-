@@ -435,7 +435,7 @@ Mandatory env vars on Render: `DATABASE_URL`, `CORS_ORIGINS`
   first-boot checks).
 - **Production env template** — [`docs/deploy.env.example`](docs/deploy.env.example).
 - **CI** — `.github/workflows/ci.yml`:
-  1. *Backend:* ruff + full pytest suite (`635 passed`).
+  1. *Backend:* ruff + full pytest suite (`748 passed`).
   2. *Migrations:* `alembic upgrade head` against a fresh Postgres 16,
      then integration/API tests against it.
   3. *Frontend:* `tsc` + `vite build`.

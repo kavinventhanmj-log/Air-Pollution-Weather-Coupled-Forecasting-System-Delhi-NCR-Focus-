@@ -338,10 +338,24 @@ class InversionResponse(BaseModel):
     inversion_source: str | None = None
     inversion_base_pressure: float | None = None
     inversion_top_pressure: float | None = None
+    inversion_base_height_m: float | None = None
+    inversion_top_height_m: float | None = None
+    inversion_thickness_m: float | None = None
+    inversion_thickness_hpa: float | None = None
     strongest_layer_gradient: float | None = None
     low_pbl_flag: bool | None = None
     pbl_category: str | None = None
     dispersion_condition: str | None = None
+    # Duration / persistence of the current episode, measured over the stored
+    # hourly history. Measured window and sample count travel with the values so
+    # a short archive is never presented as a long episode.
+    inversion_duration_h: float = 0.0
+    inversion_persistence: float | None = None
+    inversion_persistence_window_h: int = 24
+    inversion_measured_window_h: float = 0.0
+    inversion_episode_samples: int = 0
+    inversion_episode_onset: datetime | None = None
+    inversion_history_sufficient: bool = False
 
 class WindCondition(BaseModel):
     wind_speed_mps: float | None = None
