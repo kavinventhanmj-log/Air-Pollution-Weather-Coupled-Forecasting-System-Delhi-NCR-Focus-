@@ -11,7 +11,7 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![Frontend](https://img.shields.io/badge/live%20dashboard-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forecasting-system-methila.vercel.app)
+[![Frontend](https://img.shields.io/badge/live%20dashboard-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forec-eight.vercel.app)
 [![Backend](https://img.shields.io/badge/live%20API-Render%20%E2%9C%93-success?logo=render)](https://air-pollution-weather-coupled.onrender.com/health)
 
 AeroCast-NCR fuses **official CPCB real-time monitoring (data.gov.in)**,
@@ -26,7 +26,7 @@ prediction intervals) and honest (gated real engines, openly-reported skill).
 
 > **Live demo** — the system is deployed and running:
 >
-> - **Frontend (dashboard):** <https://air-pollution-weather-coupled-forecasting-system-methila.vercel.app>
+> - **Frontend (dashboard):** <https://air-pollution-weather-coupled-forec-eight.vercel.app>
 > - **Backend (API / Swagger):** <https://air-pollution-weather-coupled.onrender.com/docs>
 > - **Health check:** <https://air-pollution-weather-coupled.onrender.com/health>
 > - **Demo login:** `analyst@aerocast.in` / `AeroCast@2026`

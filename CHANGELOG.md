@@ -5,6 +5,31 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
 
 ## [1.17.0] - 2026-09
 
+### Fixed (live dashboard URL pointed at a stale Vercel project)
+
+The documented dashboard URL resolved to
+`air-pollution-weather-coupled-forecasting-system-methila.vercel.app`, a Vercel
+project that is **not** connected to the repository and was still serving a
+pre-`1.15.2` build (bundle `index-BXCbbjES.js`, 979 KB, built 2026-09-26 05:03Z
+— none of the `frame_hours`, warm-up backoff, or `Retrying` UI markers present).
+
+The git-connected project is
+`https://air-pollution-weather-coupled-forec-eight.vercel.app`, which serves
+`index-CzMUUmgp.js` (1,042,004 bytes, 2026-09-26 21:51Z) with all markers
+present, and whose `/api/*` rewrite proxy returns HTTP 200 for `/api/health`,
+`/api/stations`, and `/api/inversion/{station}` carrying the new geometry and
+episode fields.
+
+Updated `README.md`, `docs/PS_SUBMISSION.md`, and `render.yaml`
+(`FRONTEND_URL`) to the current origin. `CORS_ORIGINS` remains
+`sync: false` and still needs to be set in the Render dashboard if the
+backend is ever called cross-origin; the Vercel rewrite proxy makes normal
+dashboard traffic same-origin, so it is not required for the live path.
+
+Two further Vercel projects exist with the same base name and older bundles
+(`…-forec-coral`, not git-connected, and `aerocast-ncr`, last built
+2026-09-20). They are not referenced by the documentation and can be deleted.
+
 ### Added (inversion layer geometry, episode duration/persistence, and a measured coupling ablation)
 
 Closes the two implementation partials recorded in `docs/SIH26082_FINAL_AUDIT.md`:

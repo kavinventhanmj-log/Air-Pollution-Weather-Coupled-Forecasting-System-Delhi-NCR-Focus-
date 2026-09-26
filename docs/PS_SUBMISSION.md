@@ -181,7 +181,7 @@ which upstream is live, archived, or gated — judges can interrogate the truth.
 
 ## 10. Deployments & pointers
 
-- Frontend: https://air-pollution-weather-coupled-forecasting-system-methila.vercel.app
+- Frontend: https://air-pollution-weather-coupled-forec-eight.vercel.app
 - API: https://air-pollution-weather-coupled.onrender.com (docs at `/docs`)
 - Data: Neon PostgreSQL; compliance map: `docs/SIH_FINAL_COMPLIANCE.md`
 - Repo: `methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-`

@@ -41,7 +41,7 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: FRONTEND_URL
-        value: https://air-pollution-weather-coupled-forecasting-system-methila.vercel.app
+        value: https://air-pollution-weather-coupled-forec-eight.vercel.app
       - key: ENVIRONMENT
         value: production
       - key: LOG_LEVEL

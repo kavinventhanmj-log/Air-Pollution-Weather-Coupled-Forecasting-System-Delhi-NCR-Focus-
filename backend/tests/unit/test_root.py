@@ -12,10 +12,15 @@ from app.main import settings
 
 
 def test_root_redirects_to_frontend_when_configured(client, monkeypatch):
-    monkeypatch.setattr(settings, "frontend_url", "https://aerocast-ncr.vercel.app")
+    monkeypatch.setattr(
+        settings, "frontend_url", "https://air-pollution-weather-coupled-forec-eight.vercel.app"
+    )
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 307
-    assert resp.headers["location"] == "https://aerocast-ncr.vercel.app/"
+    assert (
+        resp.headers["location"]
+        == "https://air-pollution-weather-coupled-forec-eight.vercel.app/"
+    )
 
 
 def test_root_lands_on_docs_links_without_frontend_url(client, monkeypatch):
