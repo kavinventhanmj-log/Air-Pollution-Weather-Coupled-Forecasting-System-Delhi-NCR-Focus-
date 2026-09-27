@@ -203,7 +203,7 @@ export default function StationMap({ stations, onSelectStation, fires = [], poll
                 <p className="text-slate-500">{s.city}{s.state ? `, ${s.state}` : ''}</p>
                 {reading ? (
                   <>
-                    <p className="text-slate-800">AQI: {reading.aqi?.toFixed(0) ?? '--'}</p>
+                    <p className="text-slate-800">Recorded AQI: {reading.aqi?.toFixed(0) ?? '--'}</p>
                     <p className="text-slate-800">PM2.5: {reading.pm25?.toFixed(1) ?? '--'} μg/m³</p>
                     <p className="text-slate-500">{reading.timestamp.slice(0, 16)}</p>
                   </>

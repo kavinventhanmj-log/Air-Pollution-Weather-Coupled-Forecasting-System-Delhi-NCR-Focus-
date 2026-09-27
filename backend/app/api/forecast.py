@@ -15,6 +15,7 @@ from ..schemas.schemas import (
     ForecastPoint,
 )
 from ..services import alert_service, forecast_service
+from ..services.aqi_calculator import calculate_aqi
 
 logger = logging.getLogger("aerocast.forecast")
 
@@ -218,9 +219,16 @@ def get_forecast_comparison(
         delta = None
         if actual and actual.pm25 is not None and f.pm25_pred is not None:
             delta = round(f.pm25_pred - actual.pm25, 1)
+        actual_aqi = None
+        if actual is not None:
+            observed_aqi, observed_category, _ = calculate_aqi(
+                pm25=actual.pm25, pm10=actual.pm10, o3=actual.o3,
+                no2=actual.no2, so2=actual.so2, co=actual.co)
+            if observed_category != "Unknown":
+                actual_aqi = observed_aqi
         points.append(ForecastComparisonPoint(
             timestamp=f.forecast_timestamp,
-            actual_aqi=actual.aqi if actual else None,
+            actual_aqi=actual_aqi,
             predicted_aqi=f.aqi_pred,
             actual_pm25=actual.pm25 if actual else None,
             predicted_pm25=f.pm25_pred,

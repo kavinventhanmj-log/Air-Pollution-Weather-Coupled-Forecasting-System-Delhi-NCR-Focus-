@@ -40,7 +40,15 @@ export function aqiStyle(aqi: number | null | undefined): AqiStyle {
   if (typeof aqi !== 'number' || Number.isNaN(aqi)) {
     return { label: 'No data', hex: '#94a3b8', chip: 'bg-slate-100 text-slate-500 border-slate-200', text: 'text-slate-400', bar: 'bg-slate-300' }
   }
-  return AQI_CATEGORIES.find((c) => aqi >= c.min && aqi <= c.max) ?? AQI_CATEGORIES[5]
+  // The CPCB bands above are integer-edged (0-50, 51-100, ...) so a fractional
+  // value such as 50.5 falls into the gap between two ranges and would fall
+  // through to the Severe fallback. Interpolated fields (IDW grid/dispersion
+  // AQI) and the 1-decimal NCR average are both genuinely fractional, so floor
+  // first and resolve the value into the band it rounds down to. This mirrors
+  // `get_aqi_category` in backend/app/services/aqi_calculator.py, which also
+  // resolves in-between values into the lower band. Band edges are unchanged.
+  const whole = Math.floor(aqi)
+  return AQI_CATEGORIES.find((c) => whole >= c.min && whole <= c.max) ?? AQI_CATEGORIES[5]
 }
 
 export function aqiCategory(aqi: number | null | undefined, fallback = 'No data'): string {

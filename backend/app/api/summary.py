@@ -8,7 +8,7 @@ from ..database import get_db
 from ..models.db_models import FireReading, Forecast, ModelMetrics, PollutionReading, Station
 from ..schemas.schemas import StationAQISummary, SummaryResponse
 from ..services import alert_service
-from ..services.aqi_calculator import get_aqi_category, get_dominant_pollutant
+from ..services.aqi_calculator import calculate_aqi
 
 settings = get_settings()
 
@@ -52,19 +52,17 @@ def _build_summary(db: Session) -> object:
         r = latest_by_station.get(s.id)
         if r is None:
             continue
-        if r.aqi is not None:
-            category, _ = get_aqi_category(r.aqi)
-        else:
-            category = "Unknown"
+        aqi, category, dominant = calculate_aqi(
+            pm25=r.pm25, pm10=r.pm10, o3=r.o3, no2=r.no2, so2=r.so2, co=r.co)
         summaries.append(StationAQISummary(
             name=s.name,
-            aqi=r.aqi,
+            aqi=None if category == "Unknown" else aqi,
             aqi_category=category,
-            dominant_pollutant=get_dominant_pollutant(r.pm25, r.pm10, r.o3, r.no2, r.so2, r.co),
+            dominant_pollutant=dominant,
         ))
 
     aqi_values = [x.aqi for x in summaries if x.aqi is not None]
-    worst = max(summaries, key=lambda x: x.aqi or -1) if summaries else None
+    worst = max(summaries, key=lambda x: -1 if x.aqi is None else x.aqi) if summaries else None
     best = min(summaries, key=lambda x: x.aqi if x.aqi is not None else 10**9) if summaries else None
 
     active_fires = (

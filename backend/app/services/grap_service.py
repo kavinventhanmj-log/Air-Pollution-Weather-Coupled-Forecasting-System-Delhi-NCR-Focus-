@@ -2,7 +2,7 @@
 
 Implements the standardised stage matrix notified by the Commission for Air
 Quality Management (CAQM) for the National Capital Region.  Indexing is by the
-24-hour average AQI (the same values used across the forecasting pipeline):
+current AQI (the same values used across the forecasting pipeline):
 
     Stage I    201-300   Poor        (pre-emptive, year-round actions)
     Stage II   301-400   Very Poor   (Severe-level abatement)
@@ -110,7 +110,7 @@ NOT_INVOKED: GrapStage = {
     "aqi_range_high": 200,
     "categories": ["Good", "Satisfactory", "Moderate"],
     "color": "#22c55e",
-    "summary": "24-hour average AQI is below the Stage I threshold of 201.",
+    "summary": "Current AQI is below the Stage I threshold of 201.",
     "measures": [
         "Continue routine monitoring and early-warning (daily AQI advisories)",
         "Maintain baseline dust-control and waste-burning enforcement",
@@ -125,7 +125,7 @@ def get_grap_stages() -> list[GrapStage]:
 
 
 def stage_from_aqi(aqi: float | None) -> GrapStage:
-    """Resolve the GRAP stage for a 24-hour average AQI value.
+    """Resolve the GRAP stage for a current AQI value.
 
     Stage 0 means the plan is not invoked. Values above 500 clamp to Stage IV.
     """
@@ -165,14 +165,14 @@ def assess_grap(
     rationale: list[str] = []
 
     if aqi_val is None:
-        rationale.append("No recent 24-hour average AQI is available; stage is advisory only.")
+        rationale.append("No current AQI is available; stage is advisory only.")
     elif stage["stage"] == 0:
-        rationale.append(f"24-hour average AQI is {aqi_val} (≤ 200) — below the Stage I trigger of 201.")
+        rationale.append(f"Current AQI is {aqi_val} (≤ 200) — below the Stage I trigger of 201.")
     else:
         hi = stage["aqi_range_high"]
         stage_low = stage["aqi_range_low"]
         band = f"{stage_low}–{hi}" if hi is not None else f"> {stage_low - 1}" if stage_low is not None else "unbounded"
-        rationale.append(f"24-hour average AQI is {aqi_val} (band {band}) → invoked under GRAP {stage['title']}.")
+        rationale.append(f"Current AQI is {aqi_val} (band {band}) → invoked under GRAP {stage['title']}.")
 
     inversion_note = None
     if inversion_strength is not None:

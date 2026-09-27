@@ -388,13 +388,13 @@ export default function Dashboard() {
                     </div>
                     <p className="mt-1 text-lg font-bold tabular-nums text-slate-900">
                       {fmt(r?.aqi ?? null, 0)}
-                      <span className="ml-1 text-[10px] font-normal text-slate-500">AQI</span>
+                      <span className="ml-1 text-[10px] font-normal text-slate-500">Recorded AQI</span>
                     </p>
                     <p className="truncate text-xs text-slate-700">
                       PM2.5 {fmt(r?.pm25 ?? null, 0)}<span className="text-slate-500"> μg/m³</span>
                     </p>
                     {r ? (
-                      <p className={`truncate text-xs font-semibold capitalize ${style.text}`}>{style.label}</p>
+                      <p className={`truncate text-xs font-semibold capitalize ${style.text}`}>Recorded · {style.label}</p>
                     ) : (
                       <p className="truncate text-xs italic text-slate-500">Awaiting live data</p>
                     )}
@@ -539,7 +539,7 @@ export default function Dashboard() {
             <div className="px-6 pt-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-bold text-slate-900">NCR monitoring map</h2>
-                <span className="text-xs text-slate-500">stations = AQI colour · circles = FIRMS hotspots · cyan arrows = wind</span>
+                <span className="text-xs text-slate-500">stations = recorded AQI colour · circles = FIRMS hotspots · cyan arrows = wind</span>
               </div>
             </div>
             <div className="p-3">

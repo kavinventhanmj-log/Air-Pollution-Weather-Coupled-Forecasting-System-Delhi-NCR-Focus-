@@ -159,7 +159,7 @@ export default function Overview() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <AQICard label="AQI" value={selectedReading?.aqi} />
+        <AQICard label="Recorded AQI" value={selectedReading?.aqi} />
         <AQICard label="PM2.5" value={selectedReading?.pm25} unit="μg/m³" />
         <AQICard label="PM10" value={selectedReading?.pm10} unit="μg/m³" />
         <AQICard label="O₃" value={selectedReading?.o3} unit="μg/m³" />

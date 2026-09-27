@@ -260,3 +260,103 @@ def test_all_station_alerts_never_mutates_the_cached_sweep():
         before = list(every)
         all_station_alerts(db, every[0]["station"]).clear()
         assert all_station_alerts(db) == before
+
+
+# --- Observation fallback: AQI 0 is a score, not missing data -----------------
+# When a station has no forecast run, ``_forecast_inputs`` scores its latest
+# observation with ``calculate_aqi``. The guard used to be ``if not aqi``,
+# which silently discarded a legitimate AQI of 0 because 0 is falsy in Python.
+# AQI 0 is the floor of the CPCB "Good" band and is a real measurement, so the
+# guard now asks the scorer whether the reading was scorable instead. The alert
+# thresholds are untouched (the first one starts at 201), so a carried-through
+# 0 still raises no alert -- the point is that the station is now evaluated on
+# its real score rather than being dropped as though it had no data at all.
+
+
+def _observation_only_station(db, name="RK Puram", **concentrations):
+    """Return a seeded station carrying exactly one observation and no forecast,
+    so ``_forecast_inputs`` is forced down the observation-fallback branch."""
+    from datetime import UTC, datetime
+
+    from backend.app.models.db_models import Forecast, PollutionReading, Station
+
+    station = db.query(Station).filter(Station.name == name).first()
+    assert station is not None, f"expected seeded station {name!r}"
+    db.query(Forecast).filter(Forecast.station_id == station.id).delete()
+    db.query(PollutionReading).filter(PollutionReading.station_id == station.id).delete()
+    db.add(
+        PollutionReading(
+            station_id=station.id,
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
+            aqi=500,  # stale legacy sentinel: the fallback must ignore this
+            **concentrations,
+        )
+    )
+    db.commit()
+    return station
+
+
+def test_forecast_inputs_carries_through_a_legitimate_aqi_of_zero(db_session):
+    from backend.app.services.alert_service import _forecast_inputs
+
+    station = _observation_only_station(
+        db_session, pm25=0.0, pm10=0.0, o3=0.0, no2=0.0, so2=0.0, co=0.0
+    )
+
+    inputs = _forecast_inputs(db_session, station.id)
+
+    assert inputs is not None, "AQI 0 is a real score and must not be treated as missing"
+    assert inputs["aqi_pred"] == 0
+
+
+def test_forecast_inputs_still_rejects_a_fully_unscorable_observation(db_session):
+    from backend.app.services.alert_service import _forecast_inputs
+
+    station = _observation_only_station(
+        db_session, pm25=None, pm10=None, o3=None, no2=None, so2=None, co=None
+    )
+
+    assert _forecast_inputs(db_session, station.id) is None
+
+
+def test_forecast_inputs_still_rejects_a_non_scored_pollutant_only_observation(db_session):
+    """NH3 and Pb have no CPCB sub-index table in this repo, so a reading that
+    carries only those cannot be scored and must stay missing rather than
+    being reported as an AQI of 0."""
+    from backend.app.services.alert_service import _forecast_inputs
+
+    station = _observation_only_station(db_session, nh3=40.0, pb=2.0)
+
+    assert _forecast_inputs(db_session, station.id) is None
+
+
+def test_forecast_inputs_returns_none_when_the_station_has_no_observation(db_session):
+    from backend.app.models.db_models import Forecast, PollutionReading, Station
+    from backend.app.services.alert_service import _forecast_inputs
+
+    station = (
+        db_session.query(Station).filter(Station.name == "RK Puram").first()
+    )
+    assert station is not None
+    db_session.query(Forecast).filter(Forecast.station_id == station.id).delete()
+    db_session.query(PollutionReading).filter(
+        PollutionReading.station_id == station.id
+    ).delete()
+    db_session.commit()
+
+    assert _forecast_inputs(db_session, station.id) is None
+
+
+def test_carried_through_aqi_zero_stays_below_the_first_alert_threshold(db_session):
+    """Threshold behaviour is unchanged: the first trigger is AQI 201, so a
+    valid 0 must produce no alert at all."""
+    from backend.app.services.alert_service import _forecast_inputs
+
+    station = _observation_only_station(
+        db_session, pm25=0.0, pm10=0.0, o3=0.0, no2=0.0, so2=0.0, co=0.0
+    )
+
+    inputs = _forecast_inputs(db_session, station.id)
+
+    assert inputs is not None
+    assert generate_alerts(inputs, BASE_WEATHER, BASE_FIRE) == []

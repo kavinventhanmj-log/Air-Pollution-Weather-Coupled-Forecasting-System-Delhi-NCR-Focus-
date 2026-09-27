@@ -279,7 +279,7 @@ def _forecast_inputs(db, station_id: int) -> dict[str, Any] | None:
     )
     if reading is None:
         return None
-    aqi, _category, dominant = calculate_aqi(
+    aqi, category, dominant = calculate_aqi(
         pm25=reading.pm25,
         pm10=reading.pm10,
         o3=reading.o3,
@@ -287,7 +287,7 @@ def _forecast_inputs(db, station_id: int) -> dict[str, Any] | None:
         so2=reading.so2,
         co=reading.co,
     )
-    if not aqi:
+    if category == "Unknown":
         return None
     return {
         "aqi_pred": int(aqi),

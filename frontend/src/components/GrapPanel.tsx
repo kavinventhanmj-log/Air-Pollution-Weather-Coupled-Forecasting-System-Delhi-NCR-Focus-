@@ -5,7 +5,7 @@ export default function GrapPanel({ data }: { data: GrapAssessment | null }) {
   if (!data) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-        GRAP assessment unavailable — no persisted 24-hour AQI data yet.
+        GRAP assessment unavailable — no current AQI data yet.
       </div>
     )
   }

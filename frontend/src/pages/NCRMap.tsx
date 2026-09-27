@@ -152,7 +152,7 @@ export default function NCRMap() {
                 <p className="mt-1 text-sm text-slate-700">
                   {reading ? (
                     <>
-                      AQI <span className="font-bold tabular-nums text-slate-900">{reading.aqi?.toFixed(0) ?? '--'}</span>
+                      Recorded AQI <span className="font-bold tabular-nums text-slate-900">{reading.aqi?.toFixed(0) ?? '--'}</span>
                       <span className="text-xs text-slate-500"> · PM2.5 {fmt(reading.pm25, 0)}</span>
                     </>
                   ) : (

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from app.models.db_models import PollutionReading, Station
+from app.services import aqi_averaging
 from app.services.aqi_calculator import calculate_iaqi
 
 LEGACY_FIELDS = {
@@ -403,6 +404,35 @@ def test_legacy_instantaneous_path_is_not_labelled_an_o3_fallback(client, db_ses
     assert body["aqi_basis"] == "instantaneous"
     assert body["o3_averaging_basis"] == "unavailable"
     assert body["o3"] == 500.0
+
+
+def test_api_reports_8h_fallback_unavailable_when_the_1h_value_is_missing(
+    client, db_session, monkeypatch
+):
+    """The last of the four bases, proven over the wire rather than in isolation.
+
+    Reaching it needs the 1-hour source stubbed out: a real row set cannot get
+    here, because an 8 h mean requires at least two valid O3 readings and either
+    of those also qualifies as "the latest valid observation". The assertions
+    below still pin the retained 8 h concentration, the reported sub-index and
+    the advertised window independently of the stub.
+    """
+    monkeypatch.setattr(
+        aqi_averaging, "latest_valid_observation", lambda *a, **k: None
+    )
+    _seed(db_session, [{"o3": 315.0}] * 9)
+
+    body = _current(client)
+    assert body["o3_averaging_basis"] == "8h_fallback_unavailable"
+    # 315.0 is retained, not dropped from the AQI and not replaced by anything.
+    assert body["averaged_concentrations"]["o3"] == pytest.approx(315.0)
+    assert body["sub_indices"]["o3"] == round(calculate_iaqi("o3", 315.0), 1)
+    # 315 truncates into the 209-748 band, so the 208 trigger really did fire
+    # and the retained value really is an over-threshold one.
+    assert calculate_iaqi("o3", 315.0) > 300.0
+    assert body["dominant_pollutant"] == "o3"
+    # The response still advertises the normal 8 h period.
+    assert body["averaging_windows"]["o3"] == 8
 
 
 def test_api_o3_fallback_leaves_other_pollutants_unchanged(client, db_session):
