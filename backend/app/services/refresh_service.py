@@ -303,6 +303,12 @@ def refresh_pollution(db, dry_run: bool = False) -> int:
         "SO2 (ug/m3)": "so2",
         "CO (mg/m3)": "co",
         "Ozone (ug/m3)": "o3",
+        # NH3 is published by this feed (present in data/pollution/*.csv as
+        # "NH3 (ug/m3)"). Stored so the measurement is not lost. Not scored into
+        # the AQI - no verified CPCB sub-index table for NH3 in this repository.
+        # This feed carries no Pb column, so r.get("Pb (ug/m3)") would be absent;
+        # .get() keeps that a safe None either way.
+        "NH3 (ug/m3)": "nh3",
     }
     inserted = 0
     for raw_name, resource_id in CKAN_RESOURCES.items():
@@ -356,14 +362,7 @@ def refresh_pollution(db, dry_run: bool = False) -> int:
                 continue
             if ts in existing:
                 continue
-            aqi_val, _, _ = calculate_aqi(
-                vals.get("pm25"),
-                vals.get("pm10"),
-                vals.get("o3"),
-                vals.get("no2"),
-                vals.get("so2"),
-                vals.get("co"),
-            )
+            aqi_val, _, _ = calculate_aqi(**vals)
             rows.append(
                 PollutionReading(
                     station_id=stations[display].id,
@@ -374,6 +373,7 @@ def refresh_pollution(db, dry_run: bool = False) -> int:
                     no2=vals.get("no2"),
                     so2=vals.get("so2"),
                     co=vals.get("co"),
+                    nh3=vals.get("nh3"),
                     aqi=aqi_val,
                     data_source="opencity_ckan",
                 )

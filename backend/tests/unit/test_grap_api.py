@@ -21,10 +21,12 @@ def test_grap_current_from_seeded_state(client, db_session):
     assert response.status_code == 200
     body = response.json()
 
-    # Seeded data: Anand Vihar latest AQI ~214 (Poor) -> Stage I invoked.
+    # Seeded data: Anand Vihar latest AQI 215 (Poor) -> Stage I invoked.
+    # Latest row (i=0) is pm25=95 -> 201 + 99/29 * 4 = 214.66 -> 215, using the
+    # published 91-120 band.
     assert body["status"] == "ACTIVE"
     assert body["stage"] == 1
-    assert body["aqi"] == 214
+    assert body["aqi"] == 215
     assert body["aqi_category"] == "Poor"
     assert body["dominant_pollutant"] == "pm25"
     assert body["measures"]
@@ -41,7 +43,7 @@ def test_grap_station(client, db_session):
     assert response.status_code == 200
     body = response.json()
     assert body["stage"] == 1
-    assert body["aqi"] == 214
+    assert body["aqi"] == 215
     assert body["aqi_category"] == "Poor"
 
 

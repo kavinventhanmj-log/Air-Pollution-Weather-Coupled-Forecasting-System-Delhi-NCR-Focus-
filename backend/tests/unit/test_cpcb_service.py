@@ -124,7 +124,13 @@ def test_normalize_NA_values_stay_none_not_zero():
     assert obs[0].values.get("pm25") is None
 
 
-def test_normalize_ignores_unmapped_pollutants():
+def test_normalize_retains_nh3_and_pb():
+    """NH3 and Pb are published by the official feed, so they are kept.
+
+    They are stored (nullable) even though they cannot be scored yet, because
+    the repository has no verified CPCB breakpoint table for them. Dropping
+    them here would make the data permanently unrecoverable.
+    """
     records = [
         sample_record(pollutant_id="NH3", avg_value="33"),
         sample_record(pollutant_id="Pb", avg_value="0.5"),
@@ -132,7 +138,35 @@ def test_normalize_ignores_unmapped_pollutants():
     ]
     obs = normalize_records(records)
     assert len(obs) == 1
+    assert obs[0].values == {"pm25": 10.0, "nh3": 33.0, "pb": 0.5}
+
+
+def test_normalize_pb_alias_lead():
+    """The feed spells it "Pb"; tolerate "Lead" too."""
+    obs = normalize_records([sample_record(pollutant_id="Lead", avg_value="0.4")])
+    assert obs[0].values == {"pb": 0.4}
+
+
+def test_normalize_ignores_genuinely_unmapped_pollutants():
+    """Non-criteria pollutants are still discarded, not invented."""
+    records = [
+        sample_record(pollutant_id="CO2", avg_value="400"),
+        sample_record(pollutant_id="Benzene", avg_value="3"),
+        sample_record(pollutant_id="PM2.5", avg_value="10"),
+    ]
+    obs = normalize_records(records)
+    assert len(obs) == 1
     assert obs[0].values == {"pm25": 10.0}
+
+
+def test_normalize_nh3_missing_stays_none_not_zero():
+    records = [
+        sample_record(pollutant_id="NH3", avg_value="NA", max_value="NA", min_value="NA"),
+        sample_record(pollutant_id="PM2.5", avg_value="10"),
+    ]
+    obs = normalize_records(records)
+    assert obs[0].values == {"pm25": 10.0}
+    assert obs[0].values.get("nh3") is None
 
 
 def test_normalize_value_fallback_min_max_legacy_names():
@@ -331,6 +365,48 @@ def test_upsert_skips_unknown_station(db_session):
     assert counters["inserted"] == 0
     from app.models.db_models import Station
     assert db_session.query(Station).count() == len(DEFAULT_STATIONS)
+
+
+def test_upsert_persists_nh3_and_pb(db_session):
+    """NH3/Pb must round-trip into the nullable DB columns."""
+    from app.models.db_models import PollutionReading
+
+    obs = _obs("09-09-2026 14:30:00", pm25=40.0, nh3=31.5, pb=0.42)
+    assert upsert_ncr_data(db_session, [obs])["inserted"] == 1
+    row = (
+        db_session.query(PollutionReading)
+        .filter(PollutionReading.timestamp == datetime(2026, 9, 9, 14, 30, 0))
+        .first()
+    )
+    assert row is not None
+    assert row.nh3 == 31.5
+    assert row.pb == 0.42
+    # NH3/Pb must not drag the AQI: only the six verified pollutants decide it.
+    # pm25=40 -> 51 + 49/29 * 9 = 66.21 -> 66  (published 31-60 band)
+    assert row.aqi == 66
+    row_id = row.id
+    db_session.delete(row)
+    db_session.commit()
+    assert row_id is not None
+
+
+def test_upsert_nh3_only_reading_is_not_scored_but_is_stored(db_session):
+    """A NH3-only reading must be stored, yet must not produce AQI 0 as 'Good'."""
+    from app.models.db_models import PollutionReading
+
+    obs = _obs("09-09-2026 15:00:00", nh3=250.0)
+    assert upsert_ncr_data(db_session, [obs])["inserted"] == 1
+    row = (
+        db_session.query(PollutionReading)
+        .filter(PollutionReading.timestamp == datetime(2026, 9, 9, 15, 0, 0))
+        .first()
+    )
+    assert row is not None
+    assert row.nh3 == 250.0
+    assert row.pm25 is None and row.co is None
+    assert row.aqi == 0  # nothing scorable -> 0/Unknown, never a real "Good"
+    db_session.delete(row)
+    db_session.commit()
 
 
 def test_upsert_maps_dataset_monitor_names_to_curated_stations(db_session):

@@ -55,6 +55,15 @@ POLLUTANT_MAP = {
     "SO2": "so2",
     "CO": "co",
     "OZONE": "o3",
+    # NH3 and Pb are CPCB criteria pollutants that the feed publishes. They
+    # were previously dropped here, discarding real measurements. They are now
+    # stored (ug/m3) so the data is not lost. They are deliberately NOT scored
+    # into the AQI: this repository has no verified CPCB sub-index breakpoint
+    # table for them, and aqi_calculator reports them as unavailable rather than
+    # inventing bands. See IAQI_BREAKPOINTS / UNSCORED_POLLUTANTS.
+    "NH3": "nh3",
+    "PB": "pb",
+    "LEAD": "pb",
 }
 
 # Value column names, newest-first; legacy data.gov.in responses used the
@@ -324,7 +333,9 @@ def normalize_records(records: list[dict[str, Any]]) -> list[NormalizedObservati
         pollutant = str(record.get("pollutant_id") or "").strip().upper()
         target = POLLUTANT_MAP.get(pollutant)
         if target is None:
-            # Non-criteria pollutants (e.g. NH3, Pb) do not map to stored columns.
+            # Genuinely non-criteria pollutants (Benzene, Toluene, ...) have no
+            # column in pollution_observations and are skipped. NH3/Pb are no
+            # longer dropped here - they are mapped above.
             continue
 
         meta = station_meta.setdefault(short, {"city": "", "state": "", "lat": None, "lon": None})
@@ -412,7 +423,10 @@ def upsert_ncr_data(db, observations: list[NormalizedObservation]) -> dict[str, 
     if observations:
         db.flush()
 
-    _SIX = ("pm25", "pm10", "o3", "no2", "so2", "co")
+    # All eight CPCB criteria pollutants the schema stores. nh3/pb are nullable
+    # and may be absent from a given feed response - that is fine, they stay
+    # NULL and are excluded from the AQI rather than defaulted to zero.
+    _STORED = ("pm25", "pm10", "o3", "no2", "so2", "co", "nh3", "pb")
     source = POLLUTION_SOURCE
     for station, obs in matched:
         ts = obs.timestamp.replace(tzinfo=None)  # store IST wall-clock (matches app convention)
@@ -421,15 +435,8 @@ def upsert_ncr_data(db, observations: list[NormalizedObservation]) -> dict[str, 
             .filter(PollutionReading.station_id == station.id, PollutionReading.timestamp == ts)
             .first()
         )
-        values = {k: obs.values.get(k) for k in _SIX}
-        aqi, _, _ = calculate_aqi(
-            values["pm25"],
-            values["pm10"],
-            values["o3"],
-            values["no2"],
-            values["so2"],
-            values["co"],
-        )
+        values = {k: obs.values.get(k) for k in _STORED}
+        aqi, _, _ = calculate_aqi(**values)
 
         if existing:
             if all(getattr(existing, k) == v for k, v in values.items()) and existing.aqi == aqi:

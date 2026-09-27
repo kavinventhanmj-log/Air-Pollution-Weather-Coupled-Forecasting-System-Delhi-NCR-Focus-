@@ -107,6 +107,32 @@ class CurrentAQI(BaseModel):
     aqi: int | None
     aqi_category: str
     dominant_pollutant: str
+    # --- Additive AQI transparency fields (all optional, default None) -------
+    # The fields above are unchanged and keep their original meaning: the raw
+    # latest observation and the AQI derived from it. The fields below expose
+    # the CPCB-correct window means that `aqi` is actually scored from, plus the
+    # per-pollutant sub-indices, so a consumer can see *why* an AQI is what it
+    # is without re-implementing breakpoints client-side.
+    nh3: float | None = None
+    pb: float | None = None
+    instantaneous_aqi: int | None = None
+    aqi_basis: Literal["window_average", "instantaneous"] = "window_average"
+    sub_indices: dict[str, float] | None = None
+    averaged_concentrations: dict[str, float] | None = None
+    instantaneous_concentrations: dict[str, float] | None = None
+    pollutant_units: dict[str, str] | None = None
+    data_availability: dict[str, str] | None = None
+    averaging_windows: dict[str, int] | None = None
+    # Which averaging period the O3 sub-index was actually computed from. CPCB's
+    # rule (`About National AQI` footnote 5) substitutes the 1-hour value when
+    # the 8-hour mean exceeds 208 ug/m3, so an O3 sub-index can come from either
+    # period and a client cannot otherwise tell which. `averaging_windows`
+    # deliberately keeps reporting the *normal* 8-hour period and is unchanged.
+    # "8h_fallback_unavailable" and "unavailable" are project reporting states,
+    # not CPCB-defined outcomes.
+    o3_averaging_basis: Literal[
+        "8h", "1h_fallback", "8h_fallback_unavailable", "unavailable"
+    ] | None = None
 
 class ForecastPoint(BaseModel):
     timestamp: datetime

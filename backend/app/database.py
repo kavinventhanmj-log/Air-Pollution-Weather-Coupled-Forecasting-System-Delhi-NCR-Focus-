@@ -178,6 +178,14 @@ def apply_migrations():
         if "data_source" not in pr_cols:
             with engine.begin() as conn:
                 conn.execute(sa.text("ALTER TABLE pollution_observations ADD COLUMN data_source VARCHAR"))
+        # NH3 / Pb: CPCB criteria pollutants published by the data.gov.in feed
+        # that were previously discarded at ingest. Nullable, never backfilled
+        # with zeros, and not scored into the AQI (no verified CPCB sub-index
+        # table for them in this repository). Mirrors alembic a7c3e91b5d24.
+        for _name in ("nh3", "pb"):
+            if _name not in pr_cols:
+                with engine.begin() as conn:
+                    conn.execute(sa.text(f"ALTER TABLE pollution_observations ADD COLUMN {_name} FLOAT"))
 
     # weather_observations vertical profile columns
     if "weather_observations" in table_names:

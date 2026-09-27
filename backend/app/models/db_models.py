@@ -18,12 +18,23 @@ class PollutionReading(Base):
     id = Column(Integer, primary_key=True, index=True)
     station_id = Column(Integer, ForeignKey("stations.id"), nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False)
+    # Concentration units follow the CPCB sub-index tables, i.e. ug/m3 for
+    # every criterion pollutant EXCEPT co which is mg/m3. See
+    # app/services/aqi_calculator.POLLUTANT_UNITS.
     pm25 = Column(Float)
     pm10 = Column(Float)
     o3 = Column(Float)
     no2 = Column(Float)
     so2 = Column(Float)
-    co = Column(Float)
+    co = Column(Float)  # mg/m3 (not ug/m3)
+    # NH3 and Pb are CPCB criteria pollutants that the data.gov.in feed
+    # publishes but this project previously discarded at ingest. They are
+    # stored so the measurements are not lost. They are NOT scored into the
+    # AQI: no verified CPCB sub-index breakpoint table for them exists in this
+    # repository, so aqi_calculator reports them as unavailable rather than
+    # inventing bands. Nullable throughout - never backfilled with zeros.
+    nh3 = Column(Float)  # ug/m3
+    pb = Column(Float)  # ug/m3
     aqi = Column(Integer)
     # Provenance tag: which official source produced this reading
     # (data_gov_in | opencity_ckan | cpcb_dataset | cpcb_live). NULL for legacy
