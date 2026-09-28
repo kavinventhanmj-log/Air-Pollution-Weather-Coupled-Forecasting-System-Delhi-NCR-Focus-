@@ -530,7 +530,7 @@ introspectable at `/docs`.
 ## Testing & Quality Gates
 
 ```bash
-python -m pytest backend/tests -q                   # 960 unit + integration tests
+python -m pytest backend/tests -q                   # 966 unit + integration tests
 python -m ruff check backend/app backend/tests       # lint (CI-scoped)
 cd frontend && npm run build                         # tsc type-check + production build
 ```
@@ -585,7 +585,7 @@ Mandatory env vars on Render: `DATABASE_URL`, `CORS_ORIGINS`
   first-boot checks).
 - **Production env template** — [`docs/deploy.env.example`](docs/deploy.env.example).
 - **CI** — `.github/workflows/ci.yml`:
-  1. *Backend:* ruff + full pytest suite (`960 passed`).
+  1. *Backend:* ruff + full pytest suite (`966 passed`).
   2. *Migrations:* `alembic upgrade head` against a fresh Postgres 16,
      then integration/API tests against it.
   3. *Frontend:* `tsc` + `vite build`.

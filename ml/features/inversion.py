@@ -255,8 +255,18 @@ def summarise_inversion_episode(
         span_of_run = float((ts.iloc[-1] - ts.iloc[first_idx]).total_seconds() / 3600.0)
         # Each sample represents one sampling interval, so a run of N hourly
         # samples covers N hours even though its clock-time span is N-1.
-        intervals = np.diff(ts.dt.tz_convert("UTC").astype("int64")) / 3.6e12
-        typical = float(np.median(intervals)) if len(intervals) else 1.0
+        #
+        # The typical interval is derived with `diff().dt.total_seconds()` rather
+        # than `np.diff(series.astype("int64")) / 3.6e12`. Casting a datetime
+        # Series to int64 is resolution-dependent, not nanosecond-guaranteed:
+        # pandas 3 resolves datetime64 to microseconds, so the hard-coded
+        # nanosecond divisor turned every 1 h gap into 0.001 h, `typical` came
+        # out 0.001, and each episode was reported an hour short (19 h of
+        # inversion -> 18.001 -> 18.0). `dt.total_seconds()` means the same thing
+        # on every supported pandas. `ml/preprocessing/training_dataset.py`
+        # documents the same hazard for its own epoch conversion.
+        deltas_h = ts.diff().dt.total_seconds().dropna() / 3600.0
+        typical = float(deltas_h.median()) if len(deltas_h) else 1.0
         duration_h = span_of_run + (typical if len(ts) > 1 else 0.0)
     else:
         duration_h = 0.0

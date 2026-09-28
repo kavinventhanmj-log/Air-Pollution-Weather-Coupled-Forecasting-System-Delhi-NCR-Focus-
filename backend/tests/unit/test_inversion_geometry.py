@@ -240,6 +240,38 @@ class TestEpisodeEdgeCases:
     def test_gap_tolerance_is_documented_constant(self):
         assert EPISODE_GAP_TOLERANCE_H == 3.0
 
+    @pytest.mark.parametrize("count", [2, 3, 12, 19, 25])
+    def test_duration_is_resolution_independent(self, count):
+        """N hourly samples must report N hours on every supported pandas.
+
+        The duration is the run's clock span plus one sampling interval, so it
+        depends on the *typical* interval being derived correctly. That was
+        previously computed as ``np.diff(series.astype("int64")) / 3.6e12``,
+        which hard-codes a nanosecond divisor. pandas 3 resolves datetime64 to
+        microseconds, so every interval became 0.001 h and each episode was
+        reported an hour short - 19 h of inversion as 18.0. These tests pass on
+        pandas 2.2 locally and failed on the pandas 3 that CI installs, which is
+        exactly the divergence this pins shut.
+        """
+        flags = [True] * count
+        ep = summarise_inversion_episode(_hourly(count), flags, window_h=24)
+        assert ep["current_duration_h"] == pytest.approx(float(count), abs=0.01)
+
+    def test_typical_interval_matches_the_sampling_cadence(self):
+        """A 15-minute feed must add 0.25 h per sample, not a hard-coded 1 h.
+
+        The added term is the *observed* interval, not a fixed hour, so a
+        sub-hourly archive reports its own cadence instead of being inflated.
+        8 samples at 15 min span 7 intervals (1.75 h) and report 8 (2.0 h),
+        matching the "N samples cover N intervals" rule used above.
+        """
+        base = pd.Timestamp("2026-09-26T00:00:00Z")
+        ts = [base + pd.Timedelta(minutes=15 * i) for i in range(8)]
+        ep = summarise_inversion_episode(ts, [True] * 8, window_h=24)
+        assert ep["current_duration_h"] == pytest.approx(2.0, abs=0.01)
+        # measured_window_h is the raw 1.75 h span rounded to one decimal.
+        assert ep["measured_window_h"] == pytest.approx(1.8, abs=0.05)
+
 
 class TestLapseRateFeatureFrameColumns:
     def test_geometry_columns_added(self):

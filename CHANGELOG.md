@@ -35,6 +35,9 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
 - Station foreign keys on `weather_observations`, `forecasts`, and `alerts`;
   unique `(station_id, horizon_hours)` on `forecasts` with an idempotent
   `_upsert_forecasts()` replacing append-per-regeneration.
+- Parametrised regression tests pinning that episode duration equals the sample
+  count on every supported pandas, plus a sub-hourly case proving the added
+  term is the *observed* interval rather than a hard-coded hour.
 - Alembic revision `b8d3f1a9c4e2` (new head).
 
 ### Fixed
@@ -67,6 +70,18 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
   probe uses the SQLAlchemy inspector rather than PostgreSQL's `to_regclass()`
   so the SQLite development path works too. The `Dockerfile` now copies the
   script, which `entrypoint.sh` invokes.
+- **Every inversion episode duration was one hour short on pandas 3.**
+  `summarise_inversion_episode` computed its typical sampling interval as
+  `np.diff(series.astype("int64")) / 3.6e12`, which hard-codes a nanosecond
+  divisor. `Series.astype("int64")` is resolution-dependent rather than
+  nanosecond-guaranteed: pandas 3 resolves `datetime64` to **microseconds**, so
+  every 1 h gap became `0.001 h`, the median interval was `0.001`, and a 19-hour
+  inversion was reported as `18.001` → `18.0`. The tests passed on the pandas
+  2.2 pinned locally and failed on the pandas 3 that CI's `pandas>=2.2.0`
+  resolves to, which is how the divergence surfaced. Now computed with
+  `diff().dt.total_seconds()`, which is resolution-independent.
+  `ml/preprocessing/training_dataset.py` already documented this exact hazard
+  for its own epoch conversion; the inversion code did not follow it.
 - **Batch mode on PostgreSQL silently dropped owned id sequences.**
   `batch_alter_table` rebuilds the table and replaces the sequence with
   `_alembic_tmp_<table>_id_seq`, orphaning later inserts. Batch mode is now
@@ -94,7 +109,7 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
   `aqi=0` rows. No heuristic can distinguish a legacy re-stamp from a genuine
   repeat, so existing rows stay `false` and `audit_re_stamps.py` supports manual
   review instead.
-- README rewritten: accurate test count (960), corrected health-probe guidance,
+- README rewritten: accurate test count (966), corrected health-probe guidance,
   new "Refusal Over Fabrication" and "Database & Migrations" sections, the
   `migrate_safely.py` decision table, a candid "Known Issues" section, and a
   deployment-status note recording that the hosted Render backend was
