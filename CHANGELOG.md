@@ -3,6 +3,58 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.19.0] - 2026-09-28
+
+### Added
+
+- **Production startup is fail-closed on CORS too.** `validate_production_config`
+  now refuses to boot with `CORS_ORIGINS` unset, empty, or `*` (a wildcard
+  lets any site read the API), and rejects `DATABASE_URL` on any non-PostgreSQL
+  scheme — not just the SQLite case. An unrecognised `ENVIRONMENT` string
+  (e.g. a typo `productionn`) emits a `RuntimeWarning` on every boot because it
+  silently disables the fail-closed guard; it warns rather than refusing so
+  local dev is unaffected.
+- **Belt-and-braces production guard inside `hydrate_demo_if_empty`.** The
+  background task now refuses to synthesise observations when
+  `get_settings().is_production` is true, even if a future caller forgets to
+  check `demo_hydration_enabled` first (the config validator already refuses
+  `DEMO_HYDRATE_EMPTY_DB=true` + `production` at boot).
+- **`/api/system` schema honesty.** `schema_version` is now the current Alembic
+  head read from the migration chain on disk (falling back to `"unmanaged"` /
+  `"unknown"`) instead of a hardcoded `"1.0.0"` that could drift from the code.
+- **CTM engine status no longer leaks server paths.** `/api/system` reports only
+  the HYSPLIT executable leaf name and WRF-Chem `wrfout` file name, with
+  statuses/notes, instead of absolute installation paths.
+- **The demo credential is no longer shipped to browsers.** `LoginPage` fetches
+  the demo account from `GET /api/auth/demo` at runtime instead of embedding
+  `analyst@aerocast.in` / the published password in the client bundle. The
+  endpoint 404s when the demo account is disabled, so in production the demo
+  affordance stays hidden and no password rides the deployed frontend.
+- Regression tests: CORS wildcard/empty refusals, unsupported DB scheme,
+  unknown-environment warning, demo-hydration production refuset, system path
+  sanitisation, plus the existing guard/contract suite extended.
+
+### Changed
+
+- **`_flush_json_value` never fabricates `0.0` for a gap.** `None`, NaN, ±inf,
+  and non-floatable values now pass through as `None` (genuinely absent),
+  which is what the refusal machinery in `_model_predict` needs to see:
+  a missing measurement stays missing instead of becoming a confident zero.
+- **`build_features_from_db_with_meta` drops fictional coordinates.** When the
+  station record is missing, `latitude`/`longitude` are left absent (blocking
+  the prediction via the required-features contract) instead of serving the
+  NCR centroid `28.6139/77.2090` under composite data. Fire-impact feature
+  builders tolerate a frame without a coordinate column; coupling never reads
+  them.
+- **Imputation is now limited to the two validated fire features.** A `None`
+  feature fills to `0.0` only for `mean_frp`/`max_bright`, the values whose
+  `0.0` is a truthful "no fire that hour" encoding matching training-time
+  `fillna(0)`; any other absent feature stays blocking.
+- **coupling_service stops inventing coordinates:** both the `get_coupling_inputs`
+  centroid fallback and the `get_forecast_context` `or 28.6139` / `or 77.2090`
+  coercions are removed, and `_fire_impact_from_rows` returns its honest empty
+  result when station lat/lon are missing.
+
 ## [1.18.0] - 2026-09-28
 
 ### Added

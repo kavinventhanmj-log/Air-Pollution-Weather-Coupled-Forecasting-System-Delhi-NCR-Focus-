@@ -80,6 +80,79 @@ def test_production_accepts_postgresql():
     assert Settings(**_prod()).database_url.startswith("postgresql")
 
 
+def test_production_refuses_an_unsupported_database_scheme():
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        Settings(**_prod(database_url="mysql://user:pass@db.example.com:5432/aerocast_ncr"))
+
+
+# --- CORS_ORIGINS -----------------------------------------------------------
+
+
+def test_production_accepts_an_explicit_frontend_origin():
+    s = Settings(**_prod(cors_origins="https://app.aerocast.example"))
+    assert "app.aerocast.example" in s.cors_origins
+
+
+def test_production_refuses_a_wildcard_cors_origin():
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_prod(cors_origins="*"))
+
+
+def test_production_refuses_an_empty_cors_origin_list():
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_prod(cors_origins=""))
+
+
+# --- unknown environment ---------------------------------------------------
+
+
+def test_unknown_environment_warns_but_does_not_refuse():
+    """A typo like `productionn` quietly disables the fail-closed validator.
+
+    It must be loud (warning) without blocking development boots.
+    """
+    with pytest.warns(RuntimeWarning, match="Unrecognised environment"):
+        Settings(environment="prodction", database_url="sqlite:///./x.db")
+    with pytest.warns(RuntimeWarning, match="Unrecognised environment"):
+        Settings(environment="PRODUCTIONN", database_url="sqlite:///./x.db")
+
+
+# --- demo hydration belt-and-braces guard -----------------------------------
+
+
+def test_demo_hydration_refuses_to_run_in_production(monkeypatch):
+    """Even a schedule that forgot to check the flag cannot synthesise rows.
+
+    ``hydrate_demo_if_empty`` is the last stop before rows hit the database. If
+    a future caller starts it in production, the config validator is bypassed
+    (no Settings is constructed here) and the earlier ``demo_hydration_enabled``
+    check may also be skipped, so the function itself must refuse.
+    """
+    from app.config import Settings
+    from app.services import demo_hydration as mod
+
+    prod = Settings(
+        environment="production",
+        secret_key="k" * 48,
+        database_url=PG_URL,
+        enable_demo_user=False,
+        demo_hydrate_empty_db=False,
+    )
+    monkeypatch.setattr("app.config.get_settings", lambda: prod)
+    monkeypatch.setattr(
+        mod, "SessionLocal", lambda *a, **k: pytest.fail("hydration must not open a DB session")
+    )
+    monkeypatch.setattr(
+        mod, "_demo_observation_is_stale", lambda *a, **k: pytest.fail("stale check must not run")
+    )
+    monkeypatch.setattr(
+        mod, "_load_demo_data", lambda *a, **k: pytest.fail("dataset load must not run")
+    )
+
+    asyncio = __import__("asyncio")
+    asyncio.run(mod.hydrate_demo_if_empty(asyncio.Event()))
+
+
 # --- demo account -----------------------------------------------------------
 
 

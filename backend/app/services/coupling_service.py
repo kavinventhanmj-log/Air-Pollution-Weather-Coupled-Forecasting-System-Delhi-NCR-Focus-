@@ -58,6 +58,9 @@ def _fire_impact_from_rows(fire_rows: list, lat: float, lon: float, wind_dir: fl
         "transport_risk_level": "none",
         "stubble_impact_score": 0.0,
     }
+    if lat is None or lon is None:
+        # No station geometry means no fire geometry can be computed honestly.
+        return empty
     if not fire_rows:
         return empty
     import pandas as pd
@@ -123,8 +126,6 @@ def get_coupling_inputs(db, station) -> tuple[CouplingInputs, dict[str, Any]]:
     fires = _load_recent_fires(db)
     lat = _float(getattr(station, "latitude", None))
     lon = _float(getattr(station, "longitude", None))
-    if lat is None or lon is None:
-        lat, lon = 28.6139, 77.2090  # NCR centroid only when station has no coords
     wind_dir = _float(getattr(wx, "wind_direction", None)) if wx is not None else None
     wind_speed = _float(getattr(wx, "wind_speed", None)) if wx is not None else None
     fire = _fire_impact_from_rows(fires, lat, lon, wind_dir, wind_speed)
@@ -355,8 +356,8 @@ def get_forecast_context(db, station) -> dict[str, Any]:
     o3 = _float(getattr(poll, "o3", None)) if poll is not None else None
 
     fires = _load_recent_fires(db)
-    lat = _float(getattr(station, "latitude", None)) or 28.6139
-    lon = _float(getattr(station, "longitude", None)) or 77.2090
+    lat = _float(getattr(station, "latitude", None))
+    lon = _float(getattr(station, "longitude", None))
     latest_wx = (
         db.query(WeatherReading)
         .filter(WeatherReading.station_id == station.id)

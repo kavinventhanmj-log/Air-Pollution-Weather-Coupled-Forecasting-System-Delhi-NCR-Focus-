@@ -1,16 +1,9 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Activity, AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, Mail } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
-import { isTransientStatus } from '../api/client'
+import { isTransientStatus, getDemoCredentials } from '../api/client'
 import type { DemoCredentials } from '../types'
-
-const STATIC_DEMO: DemoCredentials = {
-  email: 'analyst@aerocast.in',
-  password: 'AeroCast@2026',
-  name: 'Demo Analyst',
-  role: 'Analyst',
-}
 
 export default function LoginPage() {
   const { user, token, login } = useAuth()
@@ -26,11 +19,28 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
-  // The demo account is a fixed, published constant, so no request is made for
-  // it. It used to be fetched on mount, which on a cold start put a second
-  // request into the wake-up path alongside the login POST — two competing
-  // retry loops on one 0.5-CPU instance, for a value already known.
-  const demo = STATIC_DEMO
+  // The demo login is fetched from the backend rather than embedded in the
+  // bundle. Publishing the credential in client source put the password in
+  // front of every visitor of a production deployment, which is why
+  // ``/api/auth/demo`` returns 404 whenever the demo account is switched off.
+  // In development / staging the endpoint answers and the button appears;
+  // in production it stays hidden and no credential is shipped.
+  const [demo, setDemo] = useState<DemoCredentials | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getDemoCredentials()
+      .then((res) => {
+        if (!cancelled) setDemo(res.data)
+      })
+      .catch(() => {
+        // 404 (demo disabled) or transient cold-start error: keep the demo
+        // affordance hidden. Manual sign-in always remains available.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   if (user && token) {
     return <Navigate to={next && !next.startsWith('/login') ? next : '/dashboard'} replace />
@@ -95,6 +105,7 @@ export default function LoginPage() {
   }
 
   async function demoSignIn() {
+    if (!demo) return
     setError(null)
     setStatus(null)
     setSubmitting(true)
@@ -195,19 +206,21 @@ export default function LoginPage() {
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={demoSignIn}
-                disabled={submitting}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-inst-300 bg-inst-50 px-4 py-2.5 text-sm font-semibold text-inst-800 transition-colors hover:bg-inst-100 focus:outline-none focus:ring-2 focus:ring-inst-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {submitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Activity className="h-4 w-4" aria-hidden="true" />
-                )}
-                {submitting ? (status ?? 'Signing in…') : 'Continue with Demo Account'}
-              </button>
+              {demo && (
+                <button
+                  type="button"
+                  onClick={demoSignIn}
+                  disabled={submitting}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-inst-300 bg-inst-50 px-4 py-2.5 text-sm font-semibold text-inst-800 transition-colors hover:bg-inst-100 focus:outline-none focus:ring-2 focus:ring-inst-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {submitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Activity className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {submitting ? (status ?? 'Signing in…') : 'Continue with Demo Account'}
+                </button>
+              )}
 
               {submitting && (
                 <p className="text-center text-xs text-slate-500">
@@ -216,11 +229,13 @@ export default function LoginPage() {
                 </p>
               )}
 
-              <div className="flex items-center gap-3 text-xs text-slate-400">
-                <span className="h-px flex-1 bg-slate-200" />
-                OR
-                <span className="h-px flex-1 bg-slate-200" />
-              </div>
+              {demo && (
+                <div className="flex items-center gap-3 text-xs text-slate-400">
+                  <span className="h-px flex-1 bg-slate-200" />
+                  OR
+                  <span className="h-px flex-1 bg-slate-200" />
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -232,17 +247,19 @@ export default function LoginPage() {
             </form>
           </div>
 
-          <div className="mt-4 rounded-xl border border-inst-100 bg-inst-50 px-6 py-4">
-              <p className="text-sm font-semibold text-inst-900">Hackathon demo access</p>
-              <p className="mt-1 break-all text-xs leading-relaxed text-inst-800">
-                Email: <span className="font-mono">{demo.email}</span>&nbsp;· Password:{' '}
-                <span className="font-mono">{demo.password}</span>
-              </p>
-              <p className="mt-1 text-xs text-inst-700">
-                These are shown for reference — just press Enter or click
-                &quot;Continue with Demo Account&quot; to sign in instantly.
-              </p>
-            </div>
+          {demo && (
+            <div className="mt-4 rounded-xl border border-inst-100 bg-inst-50 px-6 py-4">
+                <p className="text-sm font-semibold text-inst-900">Hackathon demo access</p>
+                <p className="mt-1 break-all text-xs leading-relaxed text-inst-800">
+                  Email: <span className="font-mono">{demo.email}</span>&nbsp;· Password:{' '}
+                  <span className="font-mono">{demo.password}</span>
+                </p>
+                <p className="mt-1 text-xs text-inst-700">
+                  These are shown for reference — just press Enter or click
+                  &quot;Continue with Demo Account&quot; to sign in instantly.
+                </p>
+              </div>
+          )}
 
           <p className="mt-6 text-center text-xs leading-relaxed text-slate-500">
             Prototype developed for Smart India Hackathon 2026 — SIH26082.

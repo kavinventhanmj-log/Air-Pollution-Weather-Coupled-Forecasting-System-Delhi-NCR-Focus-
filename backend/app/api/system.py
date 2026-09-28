@@ -27,24 +27,26 @@ def system_status():
 
     # Chemical-transport engines (SIH26082 R6). A HYSPLIT executable only counts
     # as usable when it physically exists alongside its meteorological inputs.
-    hysplit_bin = ""
+    # Only booleans and leaf names are reported: absolute installation paths
+    # leak server filesystem layout to anonymous callers.
+    hysplit_name = ""
     hysplit_usable = False
     if settings.hysplit_home and settings.hysplit_met_dir:
         for candidate in ("hycs_std", "hycs_std.exe", "hycs_std_32766"):
             p = Path(settings.hysplit_home).expanduser() / "exec" / candidate
             if p.exists():
-                hysplit_bin = str(p)
+                hysplit_name = candidate
                 hysplit_usable = _dir_exists(settings.hysplit_met_dir)
                 break
-        if not hysplit_bin and _file_exists(settings.hysplit_home):
-            hysplit_bin = settings.hysplit_home
+        if not hysplit_name and _file_exists(settings.hysplit_home):
+            hysplit_name = Path(settings.hysplit_home).name
 
     # WRFs chem/CTM surface: only real `wrfout_d01_*.nc` output is ever absorbed.
-    wrf_nc = ""
+    wrf_name = ""
     if _dir_exists(settings.wrf_output_dir):
         matches = sorted(Path(settings.wrf_output_dir).expanduser().glob("wrfout_d01_*.nc"))
         if matches:
-            wrf_nc = str(matches[-1])
+            wrf_name = matches[-1].name
 
     # Official IMD weather API (SIH26082 R9): key must have been provided.
     imd_configured = bool(settings.imd_api_key)
@@ -56,6 +58,19 @@ def system_status():
     firms_configured = bool(settings.nasa_firms_map_key)
 
     db_status = "connected" if database_reachable() else "disconnected"
+
+    # The schema the running code expects, taken from the migration chain on
+    # disk. This is honest to ask for: a boot that runs ``run_migrations`` has
+    # already upgraded the database to this head (and refuses to serve when the
+    # stamped revision disagrees), so "head == running code" is the verified
+    # invariant rather than a hardcoded version string that can drift.
+    from ..database import _alembic_heads
+
+    try:
+        heads = sorted(_alembic_heads())
+        schema_version = heads[0] if heads else "unmanaged"
+    except Exception:
+        schema_version = "unknown"
 
     # Cold-start cache pre-warm. Reported because a cache warm-up is invisible
     # from the outside: if it stops working, the only symptom is a slow first
@@ -78,18 +93,20 @@ def system_status():
         "ctm_hysplit": {
             "source": "NOAA HYSPLIT",
             "status": "usable" if hysplit_usable else "surrogate",
+            "detail": hysplit_name or None,
             "note": (
-                f"Binary {hysplit_bin} with GDAS/EDAS met found -> genuine dispersion runs."
+                f"Executable {hysplit_name} with GDAS/EDAS met found -> genuine dispersion runs."
                 if hysplit_usable
                 else "No HYSPLIT install supplied; analytic dispersion surrogate is active (feature-flagged in the UI)."
             ),
         },
         "ctm_wrf_chem": {
             "source": "WRF-Chem",
-            "status": "available" if wrf_nc else "gated",
+            "status": "available" if wrf_name else "gated",
+            "detail": wrf_name or None,
             "note": (
-                f"Absorbed real surface from {wrf_nc}."
-                if wrf_nc
+                f"Absorbed real surface from {wrf_name}."
+                if wrf_name
                 else "Set WRF_OUTPUT_DIR to a folder of wrfout_d01_*.nc from an external run to absorb the CTM surface here."
             ),
         },
@@ -135,5 +152,5 @@ def system_status():
         },
         "prewarm": prewarm,
         "engines": engines,
-        "schema_version": "1.0.0",
+        "schema_version": schema_version,
     }

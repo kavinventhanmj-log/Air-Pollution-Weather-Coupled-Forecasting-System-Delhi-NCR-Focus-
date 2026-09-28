@@ -241,9 +241,14 @@ def _model_predict(model, features: dict, target: str = "") -> float | None:
             return None
 
         # Imputation is allowed only for the features whose 0.0 is a truthful
-        # "no fire that hour" encoding, and matches training.
+        # "no fire that hour" encoding, and matches training. A value that is
+        # genuinely absent (``None``/NaN — the builder no longer fabricates 0.0
+        # for a gap) is filled here the same way training ``fillna(0)`` did.
         imputed = [c for c in absent if c in IMPUTABLE_FEATURES]
-        arr = np.array([[features.get(c, 0.0) for c in cols]], dtype=float)
+        arr = np.array(
+            [[0.0 if features.get(c) is None else features.get(c, 0.0) for c in cols]],
+            dtype=float,
+        )
         if imputed:
             logger.debug(
                 "Model for %s: imputed %s as 0.0 (validated training-time policy)",
@@ -609,16 +614,23 @@ def _fire_features(station_lat: float, station_lon: float, fires) -> dict:
 
 
 def _flush_json_value(v):
-    """Coerce numpy/pandas values to plain JSON-safe python numbers."""
+    """Coerce numpy/pandas values to plain JSON-safe python values.
+
+    ``None``, NaN and ±inf are left as ``None`` -- a genuinely absent value --
+    never rewritten as ``0.0``. Rewriting would turns a gap into a confident
+    measurement, which is exactly the fabrication the refusal machinery in
+    ``_model_predict`` exists to block: a missing measurement must stay missing
+    so ``missing_required_features`` can see it.
+    """
     import math
 
     if v is None:
-        return 0.0
+        return None
     try:
         f = float(v)
     except (TypeError, ValueError):
-        return 0.0
-    return f if math.isfinite(f) else 0.0
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _as_naive_utc(series) -> pd.Series:
@@ -841,10 +853,18 @@ def build_features_from_db_with_meta(db: Session, station_id: int) -> tuple[dict
 
     combined["timestamp"] = pd.to_datetime(combined["timestamp"], utc=True, errors="coerce")
     combined["station"] = station_name
-    lat = station.latitude if station else 28.6139
-    lon = station.longitude if station else 77.2090
-    combined["latitude"] = lat
-    combined["longitude"] = lon
+    lat = station.latitude if station else None
+    lon = station.longitude if station else None
+    if station is not None:
+        combined["latitude"] = lat
+        combined["longitude"] = lon
+    else:
+        # A missing station must not be silently served composite data under a
+        # fabricated NCR centroid: the refusal contract below treats absent
+        # coordinates as "cannot predict", and the feature builders tolerate a
+        # frame without a coordinate column (fire impact falls back to the
+        # domain centre, coupling never reads them).
+        combined = combined.drop(columns=["latitude", "longitude"], errors="ignore")
     combined = combined.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
 
     # Rows whose timestamp failed to parse cannot contribute a real lag value.
@@ -947,7 +967,7 @@ def build_features_from_db_with_meta(db: Session, station_id: int) -> tuple[dict
     # Keep aliases used by fallbacks / AQI computation
     features.setdefault("fire_impact_score", min(1.0, fire_count_latest / 50.0))
     features["day_of_year"] = features.get("day_of_year", 1)
-    features["is_winter"] = int(_flush_json_value(features.get("is_winter", 0)))
+    features["is_winter"] = int(_flush_json_value(features.get("is_winter", 0)) or 0)
     meta = {
         "pooled": bool(pooled),
         "local_readings": local_readings,

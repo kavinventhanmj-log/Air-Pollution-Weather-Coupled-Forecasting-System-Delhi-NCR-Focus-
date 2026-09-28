@@ -18,6 +18,10 @@ def test_system_status(client):
         "demo_hydrate_empty_db",
         "explanation",
     }
+    # The schema version is read from the migration chain, not a hardcoded
+    # string, so it cannot drift from the code that is actually running.
+    assert isinstance(body["schema_version"], str)
+    assert body["schema_version"]
     # The pre-warm state has to be readable over HTTP: it is the only way to tell
     # a working cache warm-up from a dead one without hand-timing requests, and
     # `setting`/`default_applied` say whether it is on because of the environment
@@ -46,3 +50,26 @@ def test_system_status_reports_disconnected_db(client, monkeypatch):
     response = client.get("/api/system")
     assert response.status_code == 200
     assert response.json()["database"] == "disconnected"
+
+
+def test_engine_reports_never_leak_absolute_paths(client, monkeypatch):
+    """CTM engine entries must not expose server filesystem layout.
+
+    The old response embedded the absolute HYSPLIT binary path and the full
+    WRF-Chem netCDF path, which told an anonymous caller where to keep digging.
+    The sanitised response only carries leaf names and status/notes.
+    """
+    from app.config import Settings
+
+    fake = Settings(environment="development", database_url="sqlite:///./x.db")
+    fake.hysplit_home = r"C:\Users\someone\hysplit4"
+    fake.hysplit_met_dir = r"C:\Users\someone\met"
+    fake.wrf_output_dir = r"C:\Users\someone\wrfout"
+    monkeypatch.setattr("app.config.get_settings", lambda: fake)
+    body = client.get("/api/system").json()
+    for key, engine in body["engines"].items():
+        for field in ("status", "note", "detail"):
+            value = (engine.get(field) or "").lower()
+            assert "\\users\\" not in value, f"{key}.{field} leaked a path"
+    assert body["engines"]["ctm_hysplit"]["status"] == "surrogate"
+    assert body["engines"]["ctm_wrf_chem"]["status"] == "gated"

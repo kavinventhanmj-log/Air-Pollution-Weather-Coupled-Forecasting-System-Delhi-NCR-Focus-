@@ -693,12 +693,16 @@ tree, not a roadmap item.
   builder supplies 107, missing `latitude`, `longitude`, `mean_frp`,
   `max_bright`, and three season dummies. The `/api/explanation/{station}`
   endpoint was repointed to the matched `models/pm25` family and is no longer
-  affected, but the **direct forecast path still loads the flat artifacts**, and
-  `_model_predict()` can substitute `0.0` for a feature the builder did not
-  produce. The correct fix is to retrain the flat model on the current contract
-  (or retire it in favour of the per-horizon family) — not to keep the
-  substitution. Until then, treat `mean_frp` / `max_bright` / season-dummy
-  contributions in a served PM2.5 explanation as unvalidated.
+  affected, but the **direct forecast path still loads the flat artifacts**.
+  The serving layer no longer fabricates values to bridge the gap: a feature
+  the builder did not produce stays `None`/NaN, so `latitude`/`longitude` block
+  the prediction outright (honest "insufficient data" refusal) and the two
+  fire-derived features (`mean_frp`, `max_bright`) that a missing-station row
+  legitimately reports as "no fire" are the only ones imputed to `0.0`,
+  matching the training-time `fillna(0)` policy. The correct fix remains to
+  retrain the flat model on the current contract (or retire it in favour of
+  the per-horizon family); until then a served PM2.5 prediction never carries a
+  fabricated `0.0` that a real missing reading would have masked.
 - **`re_stamped` is not backfilled for historical rows.** The migration
   deliberately leaves pre-existing rows at `false` rather than guessing: a
   pm25-only heuristic measured 87% false positives against the real database,
@@ -714,6 +718,11 @@ tree, not a roadmap item.
   fail-closed startup protections, the feature-contract audit, and the
   `autoDeploy: false` migration gate on this branch — see
   [Deployment status](#deployment-status-verified-2026-09-28) above.
+- **The demo password is never shipped to browsers anymore.** The login page
+  used to embed the credential in the client bundle; it now fetches it at
+  runtime from `/api/auth/demo`, which returns 404 whenever the demo account is
+  disabled (always in production), so the demo affordance stays hidden there
+  and no password rides in the deployed frontend.
 
 ## Contributing & Security
 

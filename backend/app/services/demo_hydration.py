@@ -268,6 +268,19 @@ async def hydrate_demo_if_empty(stop: asyncio.Event) -> None:
     """
     del stop
     try:
+        # Belt-and-braces on top of config.demo_hydration_enabled: if this ever
+        # runs in production the process is misconfigured and must not start
+        # synthesising rows. The config validator already refuses to boot with
+        # DEMO_HYDRATE_EMPTY_DB=true+production; this guard covers a future
+        # caller that forgets to check the setting first.
+        from ..config import get_settings
+
+        if get_settings().is_production:
+            logger.warning(
+                "demo hydration requested in production; refusing to synthesise observations"
+            )
+            return
+
         await asyncio.sleep(BOOT_GRACE_SECONDS)
 
         db = SessionLocal()

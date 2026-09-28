@@ -1,5 +1,7 @@
 import pathlib
+import warnings
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -145,6 +147,7 @@ class Settings(BaseSettings):
         otherwise starts "successfully" and fails open at runtime.
         """
         if not self.is_production:
+            self._warn_on_unknown_environment()
             return self
 
         problems: list[str] = []
@@ -161,11 +164,34 @@ class Settings(BaseSettings):
                 "at least 32 are required to sign HS256 tokens in production."
             )
 
-        if not self.database_url or self.database_url.startswith("sqlite"):
+        if not self.database_url:
             problems.append(
-                "DATABASE_URL is unset or points at SQLite. Production must "
+                "DATABASE_URL is unset. Production must "
                 "use PostgreSQL; a SQLite fallback serves an empty database "
                 "while reporting healthy."
+            )
+        else:
+            parsed = urlparse(self.database_url)
+            if parsed.scheme not in ("postgresql", "postgres"):
+                if parsed.scheme == "sqlite":
+                    problems.append(
+                        "DATABASE_URL points at SQLite. Production must "
+                        "use PostgreSQL; a SQLite fallback serves an empty database "
+                        "while reporting healthy."
+                    )
+                else:
+                    problems.append(
+                        f"DATABASE_URL uses unsupported scheme "
+                        f"'{parsed.scheme or '<none>'}'. Production must "
+                        "use PostgreSQL."
+                    )
+
+        cors_origins = [o.strip() for o in (self.cors_origins or "").split(",") if o.strip()]
+        if not cors_origins or cors_origins == ["*"]:
+            problems.append(
+                "CORS_ORIGINS is unset, empty or a wildcard. Production must "
+                "list the exact allowed frontend origins (comma separated); "
+                "a wildcard lets any site read the API."
             )
 
         if self.demo_user_enabled:
@@ -188,6 +214,24 @@ class Settings(BaseSettings):
                 + "".join(f"\n  - {p}" for p in problems)
             )
         return self
+
+    def _warn_on_unknown_environment(self) -> None:
+        """Warn (never refuse) when ``environment`` does not name a known tier.
+
+        A typo like ``ENVIRONMENT=productionn`` silently disables the fail-closed
+        production validator, which is the worst possible failure mode. A
+        warning is louder than nothing but must not block development boots.
+        """
+        known = {"development", "production", "staging", "test", "testing", "ci"}
+        value = self.environment.strip().lower()
+        if value not in known:
+            warnings.warn(
+                f"Unrecognised environment '{self.environment}'. The fail-closed "
+                "production validator only applies when environment is exactly "
+                "'production'; a typo here silently turns those guards off.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
     @property
     def prewarm_enabled(self) -> bool:

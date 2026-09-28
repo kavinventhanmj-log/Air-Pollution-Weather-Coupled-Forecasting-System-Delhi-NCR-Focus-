@@ -107,6 +107,13 @@ drop/recreate the DB first to avoid conflicts.
 - **Reverse proxy / HTTPS.** Keep `:8000`/`:5173` on the host private and put a
   TLS-terminating reverse proxy (Caddy, nginx, Traefik) in front; set
   `CORS_ORIGINS` to the real public origin (e.g. `https://forecast.example`).
+- **Production startup is fail-closed.** With `ENVIRONMENT=production` the app
+  refuses to boot — rather than starting "healthy" — if `SECRET_KEY` is the
+  published dev placeholder or shorter than 32 chars, `DATABASE_URL` is missing
+  or not PostgreSQL, `CORS_ORIGINS` is unset/empty/wildcard, or the demo
+  account / demo hydration are switched on. An unrecognised `ENVIRONMENT`
+  string (e.g. a typo `productionn`) warns on every boot because it silently
+  disables those guards. See `test_production_config_guard.py`.
 - **Secrets.** Do not commit `deploy.env`; rotate the development-only Postgres
   password before exposure. Provide `NASA_FIRMS_MAP_KEY` via the env file.
 - **Sizing.** `models/` (200+ model files) and `data/` are mounted read-only, so
@@ -136,7 +143,7 @@ python -m alembic upgrade head
 | `DATABASE_URL` | `sqlite:///./aerocast_ncr.db` | SQLAlchemy connection string; Postgres triggers Alembic migrations |
 | `NASA_FIRMS_MAP_KEY` | *(empty)* | Optional FIRMS API key for live fire data |
 | `CORS_ORIGINS` | `http://localhost:5173,...` | Allowed browser origins |
-| `ENVIRONMENT` | `development` | App runtime environment label |
+| `ENVIRONMENT` | `development` | App runtime environment label. Must be exactly `production` for the fail-closed startup guard; anything else (incl. misspellings) boots with the guard off and emits a warning |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `LIVE_REFRESH_ENABLED` | `false` | Whether the refresh scheduler runs |
 | `LIVE_REFRESH_INTERVAL_HOURS` | `3` | Scheduler cadence |
