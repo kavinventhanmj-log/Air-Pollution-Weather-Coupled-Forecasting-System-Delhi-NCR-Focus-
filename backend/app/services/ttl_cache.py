@@ -19,6 +19,8 @@ the same database across tests.
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -28,7 +30,25 @@ _lock = threading.Lock()
 _store: dict[str, tuple[float, Any]] = {}
 
 
+def _running_under_pytest() -> bool:
+    """True while pytest is executing a test.
+
+    Both conditions are required. ``pytest in sys.modules`` alone is true for
+    any process that merely imported pytest, and ``PYTEST_CURRENT_TEST`` alone
+    is only set *while* a test runs, so importing the module at collection
+    time would not flip caching on.
+    """
+    return "pytest" in sys.modules and "PYTEST_CURRENT_TEST" in os.environ
+
+
 def _cache_enabled() -> bool:
+    # Tests mutate the database between cases while the cache is process-global,
+    # so a cached value computed for one test is served to the next. Gating on
+    # the dialect used to hide this: SQLite disabled the cache, so the full local
+    # suite passed, while the PostgreSQL CI job - which enables the cache - fed
+    # stale payloads to tests asserting an empty result.
+    if _running_under_pytest():
+        return False
     from ..config import get_settings
 
     try:

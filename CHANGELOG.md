@@ -70,6 +70,21 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
   probe uses the SQLAlchemy inspector rather than PostgreSQL's `to_regclass()`
   so the SQLite development path works too. The `Dockerfile` now copies the
   script, which `entrypoint.sh` invokes.
+- **The PostgreSQL CI job leaked cached responses between tests.** The TTL cache
+  is enabled on PostgreSQL and disabled on SQLite, and the rationale given was
+  that tests need isolation. Gating on the *database dialect* satisfied that
+  goal only on the developer's machine: the full local suite runs on SQLite with
+  the cache off, while the `Migrations on PostgreSQL` job runs on Postgres with
+  the cache **on**, so a payload computed for one test was served to the next.
+  Two tests asserting an empty result failed there while passing locally:
+  `test_dispersion_forecast_with_no_surface` expected `frames == []` and got 24
+  cached frames, and `test_get_alerts_empty` expected `[]` and got 2 alerts.
+  Caching is now refused while pytest is executing, whatever the dialect, and
+  an autouse fixture clears the store around every test as a second line of
+  defence. Production behaviour is unchanged: a PostgreSQL deployment still
+  caches, which is the point of the cache. 8 tests in
+  `test_ttl_cache_isolation.py` pin both halves, including a test that
+  reproduces the original failure under a PostgreSQL URL.
 - **Every inversion episode duration was one hour short on pandas 3.**
   `summarise_inversion_episode` computed its typical sampling interval as
   `np.diff(series.astype("int64")) / 3.6e12`, which hard-codes a nanosecond
@@ -109,7 +124,7 @@ All notable changes to **AeroCast-NCR** are documented here. Format follows
   `aqi=0` rows. No heuristic can distinguish a legacy re-stamp from a genuine
   repeat, so existing rows stay `false` and `audit_re_stamps.py` supports manual
   review instead.
-- README rewritten: accurate test count (966), corrected health-probe guidance,
+- README rewritten: accurate test count (974), corrected health-probe guidance,
   new "Refusal Over Fabrication" and "Database & Migrations" sections, the
   `migrate_safely.py` decision table, a candid "Known Issues" section, and a
   deployment-status note recording that the hosted Render backend was

@@ -137,3 +137,24 @@ def db_session():
     with SessionLocal() as session:
         _seed_test_data(session)
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _clear_ttl_cache():
+    """Drop the process-global TTL cache around every test.
+
+    The cache is enabled on PostgreSQL and disabled on SQLite, so gating it on
+    the database dialect let cached payloads computed for one test be served to
+    the next whenever CI ran against Postgres. Two tests asserting an empty
+    result failed there for exactly this reason while passing locally.
+
+    ``ttl_cache._cache_enabled`` now also refuses to cache under pytest, which
+    is the actual fix. This fixture is the belt-and-braces half: it guarantees
+    isolation even if a future change re-enables caching, and it keeps a
+    non-cached store from holding references to objects from a dropped schema.
+    """
+    from app.services.ttl_cache import invalidate_all
+
+    invalidate_all()
+    yield
+    invalidate_all()
