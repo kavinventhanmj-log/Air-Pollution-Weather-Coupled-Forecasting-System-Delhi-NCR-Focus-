@@ -141,26 +141,115 @@ def load_pollutant_model(pollutant: str, horizon_hours: int | None = None):
     return None
 
 
-def _model_predict(model, features: dict) -> float | None:
+#: Features whose training-time value was produced by a real measurement, so
+#: substituting ``0.0`` for them asserts something false rather than merely
+#: unknown. ``0.0`` is the physically impossible value for a Delhi-NCR
+#: coordinate, and ``0.0`` fire radiative power contradicts the fire-impact
+#: score computed from the same observations in the same request. When these are
+#: absent the model must not be asked for a prediction at all.
+REQUIRED_REAL_FEATURES = ("latitude", "longitude")
+
+#: Features that are legitimately ``0.0`` when no fire was detected, and were
+#: also ``0.0`` at training time (``ml/training/trainer.py`` applies
+#: ``fillna(0)``, and the offline builder leaves them empty for fire-free
+#: hours). Filling these is therefore truthful, but it is still reported so the
+#: provenance of a prediction records how many inputs were imputed.
+IMPUTABLE_FEATURES = ("mean_frp", "max_bright")
+
+
+def _model_feature_columns(model) -> list[str] | None:
+    """The feature names the artifact was trained on, in training order.
+
+    Read from the artifact itself so the serving vector can never be built from
+    a guess about column counts or insertion order. Returns ``None`` when the
+    artifact records no contract, which callers treat as a load failure.
+    """
+    for attr in ("feature_names_", "feature_names_in_"):
+        names = getattr(model, attr, None)
+        if names is not None and len(names):
+            return list(names)
+    inner = getattr(model, "model", None)
+    if inner is not None:
+        names = getattr(inner, "feature_names_in_", None)
+        if names is not None and len(names):
+            return list(names)
+    return None
+
+
+def missing_required_features(columns: list[str], features: dict) -> list[str]:
+    """Contract names the artifact needs that ``features`` cannot supply.
+
+    Reports the intersection of (a) the artifact's declared contract and (b)
+    the values the builder actually produced as absent-or-null. A name is
+    treated as missing when it is not a key at all, or maps to ``None``/NaN.
+    A real ``0.0`` is present: it is a measured zero, not a gap.
+    """
+    missing: list[str] = []
+    for name in columns:
+        if name not in features:
+            missing.append(name)
+            continue
+        value = features.get(name)
+        if value is None:
+            missing.append(name)
+            continue
+        try:
+            if pd.isna(float(value)):
+                missing.append(name)
+        except (TypeError, ValueError):
+            missing.append(name)
+    return missing
+
+
+def _model_predict(model, features: dict, target: str = "") -> float | None:
+    """Predict with a flat artifact, or return ``None`` when that would lie.
+
+    The previous version assembled the vector with ``features.get(c, 0.0)``, so
+    any feature the builder did not produce became a confident ``0.0``. For
+    ``latitude``/``longitude`` that is not a neutral default but a provably
+    wrong claim, and it silently suppressed the honest heuristic fallback
+    further down the call chain. The contract is now enforced here:
+
+    * the artifact's own ``feature_names_`` supplies the column order;
+    * required real measurements that are absent abort the prediction;
+    * imputable features are filled with ``0.0`` (matching the validated
+      training-time ``fillna(0)`` policy) and counted for provenance.
+
+    Returning ``None`` routes the caller to the fallback, so a model with an
+    unsatisfiable contract can never be persisted as a valid prediction.
+    """
     if model is None:
         return None
     try:
-        cols = None
-        for attr in ("feature_names_", "feature_names_in_"):
-            if hasattr(model, attr):
-                names = getattr(model, attr)
-                if names is not None and len(names):
-                    cols = list(names)
-                    break
-        if cols is None and hasattr(model, "model"):
-            inner = model.model
-            if hasattr(inner, "feature_names_in_"):
-                names = inner.feature_names_in_
-                if names is not None and len(names):
-                    cols = list(names)
+        cols = _model_feature_columns(model)
         if cols is None:
-            cols = FEATURE_NAMES
+            logger.warning(
+                "Model for %s declares no feature_names_ contract; refusing to predict",
+                target or "unknown target",
+            )
+            return None
+
+        absent = missing_required_features(cols, features)
+        blocking = [c for c in absent if c in REQUIRED_REAL_FEATURES]
+        if blocking:
+            logger.warning(
+                "Model for %s needs measured %s which the feature builder did not "
+                "supply; falling back instead of imputing zeros",
+                target or "unknown target",
+                ", ".join(sorted(blocking)),
+            )
+            return None
+
+        # Imputation is allowed only for the features whose 0.0 is a truthful
+        # "no fire that hour" encoding, and matches training.
+        imputed = [c for c in absent if c in IMPUTABLE_FEATURES]
         arr = np.array([[features.get(c, 0.0) for c in cols]], dtype=float)
+        if imputed:
+            logger.debug(
+                "Model for %s: imputed %s as 0.0 (validated training-time policy)",
+                target or "unknown target",
+                ", ".join(sorted(imputed)),
+            )
         raw = model.predict(arr)
         val = float(np.ravel(raw)[0])
         return None if (np.isnan(val) or np.isinf(val)) else max(0.0, val)
@@ -235,6 +324,60 @@ def _fallback_co(features: dict) -> float:
     return max(0.2, base / disp)
 
 
+def audit_feature_contract(features: dict, horizons=None) -> dict:
+    """Describe how well ``features`` satisfies the deployed artifacts' contract.
+
+    Read-only. Reports, for the longest requested horizon, how many contract
+    features the builder supplied, which required measurements were missing, and
+    whether the model may legitimately be used. Attached to every forecast
+    response so a published number can never imply a satisfied contract that was
+    not actually met.
+    """
+    if horizons is None:
+        horizons = DEFAULT_HORIZONS
+    probe = load_pollutant_model("pm25", max(horizons))
+    if probe is None:
+        return {
+            "artifact": None,
+            "declared_features": None,
+            "satisfied": False,
+            "missing_required": [],
+            "imputed": [],
+            "usable": False,
+            "reason": "model artifact could not be loaded",
+        }
+
+    cols = _model_feature_columns(probe)
+    if cols is None:
+        return {
+            "artifact": f"xgboost_pm25_{max(horizons)}h",
+            "declared_features": None,
+            "satisfied": False,
+            "missing_required": [],
+            "imputed": [],
+            "usable": False,
+            "reason": "artifact declares no feature_names_ contract",
+        }
+
+    absent = missing_required_features(cols, features)
+    missing_required = sorted(c for c in absent if c in REQUIRED_REAL_FEATURES)
+    imputed = sorted(c for c in absent if c in IMPUTABLE_FEATURES)
+    satisfied = not missing_required
+    return {
+        "artifact": f"xgboost_pm25_{max(horizons)}h",
+        "declared_features": len(cols),
+        "satisfied": satisfied,
+        "missing_required": missing_required,
+        "imputed": imputed,
+        "usable": satisfied,
+        "reason": (
+            None
+            if satisfied
+            else "required measured features unavailable: " + ", ".join(missing_required)
+        ),
+    }
+
+
 def predict_pollutants(features: dict, horizons=None) -> list[dict]:
     if horizons is None:
         horizons = DEFAULT_HORIZONS
@@ -247,22 +390,22 @@ def predict_pollutants(features: dict, horizons=None) -> list[dict]:
         so2_model = load_pollutant_model("so2", h)
         co_model = load_pollutant_model("co", h)
 
-        pm25_pred = _model_predict(pm25_model, features)
+        pm25_pred = _model_predict(pm25_model, features, "pm25")
         if pm25_pred is None:
             pm25_pred = _fallback_pm25(features, h)
-        pm10_pred = _model_predict(pm10_model, features)
+        pm10_pred = _model_predict(pm10_model, features, "pm10")
         if pm10_pred is None:
             pm10_pred = _fallback_pm10(pm25_pred, features, h)
-        o3_pred = _model_predict(o3_model, features)
+        o3_pred = _model_predict(o3_model, features, "o3")
         if o3_pred is None:
             o3_pred = _fallback_o3(features, h)
-        no2_pred = _model_predict(no2_model, features)
+        no2_pred = _model_predict(no2_model, features, "no2")
         if no2_pred is None:
             no2_pred = _fallback_no2(features)
-        so2_pred = _model_predict(so2_model, features)
+        so2_pred = _model_predict(so2_model, features, "so2")
         if so2_pred is None:
             so2_pred = _fallback_so2(features)
-        co_pred = _model_predict(co_model, features)
+        co_pred = _model_predict(co_model, features, "co")
         if co_pred is None:
             co_pred = _fallback_co(features)
 
@@ -289,6 +432,161 @@ def predict_pollutants(features: dict, horizons=None) -> list[dict]:
             }
         )
     return predictions
+
+
+#: The station coordinates ``scripts/build_dataset.py`` used to attribute FIRMS
+#: detections while building the training set. A detection belongs to whichever
+#: of these stations is nearest, and only then counts towards that station's
+#: ``mean_frp``/``max_bright``. Serving has to reproduce that attribution or the
+#: feature means something different than it did at training time.
+TRAINING_FIRE_STATIONS = {
+    "Anand_Vihar": (28.6492, 77.2918),
+    "RK_Puram": (28.5601, 77.1835),
+    "ITO": (28.6290, 77.2410),
+    "Dwarka": (28.5921, 77.0460),
+    "Punjabi_Bagh": (28.6692, 77.1285),
+}
+
+
+#: The season categories the training artifacts expect as one-hot columns.
+SEASON_NAMES = ("winter", "spring", "summer", "autumn")
+
+_SEASON_MONTHS: dict[int, str] | None = None
+
+
+def _season_month_map() -> dict[int, str]:
+    """Month -> season, inverted from the training pipeline's own SEASON_MAP.
+
+    Derived rather than re-declared so the serving encoding cannot drift away
+    from the one the artifacts were trained with: if the training map changes,
+    this changes with it.
+    """
+    global _SEASON_MONTHS
+    if _SEASON_MONTHS is None:
+        from ml.features.feature_engineering import SEASON_MAP
+
+        _SEASON_MONTHS = {int(month): season for month, season in SEASON_MAP.items()}
+    return _SEASON_MONTHS
+
+
+def _season_dummies(timestamp) -> dict:
+    """Return the complete four-way season one-hot for a single timestamp.
+
+    ``add_temporal_features`` derives the dummies with ``pd.get_dummies``, whose
+    output columns depend on which categories happen to appear in the frame. A
+    short serving history therefore produced only the current season's column and
+    left the other three names absent, and the model layer filled them with 0.0.
+    The current season's dummy then had to be exactly 1.0, so an absent name was
+    only accidentally correct.
+
+    This recomputes all four from the timestamp using the same SEASON_MAP the
+    training pipeline used, so every name in the contract is present and correct
+    no matter how little history the frame carries. A timestamp that cannot be
+    parsed returns the all-zero vector rather than an arbitrary one: the season
+    is then genuinely unknown, and the model layer's contract check will treat
+    the row as unusable instead of inventing a season.
+    """
+    zeros = {f"season_{s}": 0.0 for s in SEASON_NAMES}
+    if timestamp is None:
+        return zeros
+    try:
+        ts = pd.Timestamp(timestamp)
+        if pd.isna(ts):
+            return zeros
+    except (TypeError, ValueError):
+        return zeros
+    season = _season_month_map().get(ts.month)
+    if season is None:
+        return zeros
+    return {f"season_{s}": (1.0 if s == season else 0.0) for s in SEASON_NAMES}
+
+
+def _firms_aggregate_features(fires, origin, station_lat, station_lon) -> dict:
+    """Aggregate stored FIRMS detections into ``mean_frp`` / ``max_bright``.
+
+    Reproduces the training-time aggregation in
+    ``scripts/build_dataset.py::load_fires`` exactly:
+
+    * each detection is attributed to the **nearest** of the five stations the
+      training set was built against (squared-distance, no radius cutoff);
+    * detections whose nearest station is not the station being forecast are
+      discarded, exactly as the offline builder discarded them;
+    * the surviving detections are bucketed into the **same clock hour** as the
+      forecast origin (``acq_date`` floored to the hour), not a window around it;
+    * ``mean_frp`` is the mean ``frp`` and ``max_bright`` the max ``bright_ti4``
+      of that bucket. The stored ``brightness`` column is the same FIRMS field
+      (``firms_service._normalise_brightness`` writes VIIRS ``bright_ti4`` /
+      MODIS ``bright_ti31`` in Kelvin), so it is the correct source column.
+
+    An earlier version of this function averaged every detection within +/-3
+    hours regardless of which station it belonged to. That inflated the feature
+    for a station with no fire of its own, which is a fabricated value wearing a
+    measured one's units.
+
+    Returns 0.0 for both when the station-hour has no detections, because that is
+    the encoding training actually saw: the offline builder emits no group row
+    for a fire-free station-hour, the left-merge leaves the cell empty, and
+    ``ml/training/trainer.py`` applies ``fillna(0)``. So for a fire-free hour
+    0.0 is a true value, not a stand-in for an unknown one.
+    """
+    empty = {"mean_frp": 0.0, "max_bright": 0.0}
+    if not fires or origin is None or station_lat is None or station_lon is None:
+        return empty
+
+    try:
+        origin_ts = pd.Timestamp(origin)
+        if pd.isna(origin_ts):
+            return empty
+        if origin_ts.tzinfo is None:
+            origin_ts = origin_ts.tz_localize("UTC")
+    except (TypeError, ValueError):
+        return empty
+    origin_hour = origin_ts.floor("h")
+
+    frp_values: list[float] = []
+    brightness_values: list[float] = []
+    for f in fires:
+        acq = getattr(f, "acq_date", None)
+        if acq is None:
+            continue
+        try:
+            acq_ts = pd.Timestamp(acq)
+            if acq_ts.tzinfo is None:
+                acq_ts = acq_ts.tz_localize("UTC")
+        except (TypeError, ValueError):
+            continue
+        if acq_ts.floor("h") != origin_hour:
+            continue
+
+        fire_lat = getattr(f, "latitude", None)
+        fire_lon = getattr(f, "longitude", None)
+        if fire_lat is None or fire_lon is None:
+            continue
+        try:
+            fire_lat = float(fire_lat)
+            fire_lon = float(fire_lon)
+        except (TypeError, ValueError):
+            continue
+
+        # Nearest-station attribution, matching the offline builder.
+        nearest = min(
+            TRAINING_FIRE_STATIONS.items(),
+            key=lambda kv: (fire_lat - kv[1][0]) ** 2 + (fire_lon - kv[1][1]) ** 2,
+        )
+        if nearest[1] != (float(station_lat), float(station_lon)):
+            continue
+
+        frp = getattr(f, "frp", None)
+        if frp is not None and not pd.isna(frp):
+            frp_values.append(float(frp))
+        brightness = getattr(f, "brightness", None)
+        if brightness is not None and not pd.isna(brightness):
+            brightness_values.append(float(brightness))
+
+    return {
+        "mean_frp": round(sum(frp_values) / len(frp_values), 4) if frp_values else 0.0,
+        "max_bright": round(max(brightness_values), 4) if brightness_values else 0.0,
+    }
 
 
 def _fire_features(station_lat: float, station_lon: float, fires) -> dict:
@@ -616,9 +914,35 @@ def build_features_from_db_with_meta(db: Session, station_id: int) -> tuple[dict
     latest = eng.iloc[-1]
     features = {}
     for col in eng.columns:
-        if col in ("timestamp", "station", "latitude", "longitude"):
+        if col in ("timestamp", "station"):
             continue
         features[col] = _flush_json_value(latest.get(col))
+
+    # Station coordinates are part of the flat artifacts' 114-feature contract
+    # and were previously dropped here, which left ``_model_predict`` to
+    # impute 0.0 -- a value that is not a plausible Delhi-NCR coordinate. The
+    # values are already on the frame; carry them through.
+    features["latitude"] = _flush_json_value(lat)
+    features["longitude"] = _flush_json_value(lon)
+
+    # ``mean_frp`` / ``max_bright`` are the remaining contract features the
+    # serving frame never produced. They are attributed to the nearest training
+    # station and bucketed by the hour in ``scripts/build_dataset.py``, so the
+    # same attribution is applied here against the stored FIRMS rows. When the
+    # station-hour has no detections the training pipeline leaves the cell empty
+    # and ``fillna(0)`` encodes it as 0.0, so 0.0 is the faithful value for that
+    # case -- unlike the coordinates, it is not a fabricated claim.
+    features.update(_firms_aggregate_features(fires, latest.get("timestamp"), lat, lon))
+
+    # The four ``season_*`` contract columns are a complete one-hot encoding of a
+    # single deterministic value, but ``add_temporal_features`` builds them with
+    # ``pd.get_dummies``, which only emits the categories present in the frame.
+    # A short history therefore yields one dummy and three absent names, which
+    # the model layer then received as 0.0 -- right by luck for an autumn row,
+    # wrong for any other. All four are set explicitly from the row's own month
+    # using the training pipeline's SEASON_MAP, so the encoding is identical to
+    # training regardless of how much history the frame holds.
+    features.update(_season_dummies(latest.get("timestamp")))
 
     # Keep aliases used by fallbacks / AQI computation
     features.setdefault("fire_impact_score", min(1.0, fire_count_latest / 50.0))
@@ -727,6 +1051,7 @@ def _empty_provenance(
     fire_rows: int,
     model_artifact: str | None,
     model_sha: str | None,
+    feature_contract: dict | None = None,
 ) -> dict:
     """Provenance for a station with no observation rows at all.
 
@@ -753,6 +1078,7 @@ def _empty_provenance(
         "is_demo": False,
         "is_re_stamped": False,
         "data_source": None,
+        "feature_contract": None,
         "station": station_name,
         "generated_at": now,
     }
@@ -767,6 +1093,7 @@ def build_provenance(
     horizons: list[int] | None = None,
     model_label: str = "direct-ml",
     fallback_reason: str | None = None,
+    feature_contract: dict | None = None,
 ) -> dict:
     """Assemble the provenance block attached to a forecast response.
 
@@ -774,6 +1101,10 @@ def build_provenance(
     which artifact served the prediction, and whether the underlying data is
     demo/re-stamped. Staleness is derived from the newest observation rather
     than assumed, so the UI can never imply freshness the data does not have.
+
+    ``feature_contract`` carries the serving-time model-input audit. It is
+    included verbatim so a response can never claim a satisfied contract when
+    required inputs were actually missing and the model was bypassed.
     """
     from ..models.db_models import FireReading, PollutionReading, WeatherReading
 
@@ -816,6 +1147,7 @@ def build_provenance(
             fire_rows=fire_rows,
             model_artifact=model_artifact,
             model_sha=model_sha,
+            feature_contract=feature_contract,
         )
     latest_ts = latest.timestamp
     if latest_ts is not None and latest_ts.tzinfo is not None:
@@ -844,6 +1176,7 @@ def build_provenance(
         "is_demo": is_demo,
         "is_re_stamped": is_re_stamped,
         "data_source": data_source,
+        "feature_contract": feature_contract,
         "station": station_name,
         "generated_at": now,
     }

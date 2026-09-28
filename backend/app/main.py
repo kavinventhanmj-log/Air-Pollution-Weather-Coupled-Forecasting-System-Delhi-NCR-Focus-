@@ -84,33 +84,57 @@ async def lifespan(app: FastAPI):
     verify_postgres_connection()
 
     # 2. Database migrations + schema
-    # Each stage is guarded independently so a failure in one (e.g. an Alembic
-    # revision error on PostgreSQL) can never skip the others. In particular
-    # `create_all` runs unconditionally — it is idempotent and guarantees the
-    # tables exist even when versioned migrations fail, so data endpoints and
-    # the live-refresh scheduler never 500 on a missing table.
+    #
+    # On PostgreSQL a migration failure is FATAL. The previous behaviour caught
+    # the exception, logged it, and then ran `Base.metadata.create_all()` to
+    # paper over the gap. That made a failed migration indistinguishable from a
+    # successful one: `create_all()` recreates *tables* but never writes
+    # `alembic_version`, so the service came up "healthy" against a schema that
+    # was missing the constraints and columns the code depends on. A live
+    # deployment was found serving duplicate forecast rows per horizon for
+    # exactly this reason.
+    #
+    # `create_all()` is now confined to SQLite, which is a local development
+    # convenience only. Production is migrated by Alembic and nothing else.
+    is_sqlite = settings.database_url.startswith("sqlite")
     try:
         migrated = run_migrations()
         if migrated:
-            logger.info("Alembic migrations applied at startup")
+            logger.info("Alembic migrations applied and verified at startup")
     except Exception:
-        logger.exception("Alembic migrations failed at startup (schema fallback below)")
+        logger.exception("Alembic migrations failed at startup")
+        if not is_sqlite:
+            # Surface the failure to the platform instead of serving requests
+            # against a schema we cannot vouch for.
+            raise
 
-    try:
-        apply_migrations()
-        Base.metadata.create_all(bind=engine)
-    except Exception:
-        logger.exception("Schema creation failed at startup")
+    if is_sqlite:
+        # Development only: the lightweight SQLite reconciliation plus
+        # create_all() keeps a local file database usable without running the
+        # full Alembic chain. Never reached on PostgreSQL.
+        try:
+            apply_migrations()
+            Base.metadata.create_all(bind=engine)
+        except Exception:
+            logger.exception("SQLite schema creation failed at startup")
+    else:
+        logger.info("PostgreSQL: schema is managed by Alembic only; create_all() not used")
 
     try:
         with SessionLocal() as db:
             seeded = seed_data(db)
             if seeded:
                 logger.info("Seeded %d default Delhi NCR stations", seeded)
-            from .api.auth import ensure_demo_user
-            ensure_demo_user(db)
+            if settings.demo_user_enabled:
+                from .api.auth import ensure_demo_user
+                ensure_demo_user(db)
+            else:
+                logger.info(
+                    "Demo user seeding disabled for this environment; "
+                    "no shared-credential account created"
+                )
     except Exception:
-        logger.exception("Station/demo-user seeding failed at startup")
+        logger.exception("Station seeding failed at startup")
 
     # 3. Optional live-refresh scheduler
     refresh_task = None
@@ -128,10 +152,19 @@ async def lifespan(app: FastAPI):
     #    pollution or weather has no reading in the last 24h). Never blocks the
     #    readiness probe, so Render health checks are unaffected.
     hydrate_task = None
-    if getattr(settings, "demo_hydrate_empty_db", False):
+    if settings.demo_hydration_enabled:
         from .services.demo_hydration import hydrate_demo_if_empty
         hydrate_task = asyncio.create_task(hydrate_demo_if_empty(_refresh_stop))
         logger.info("Demo hydration task scheduled (DEMO_HYDRATE_EMPTY_DB=true)")
+    elif settings.demo_hydrate_empty_db and settings.is_production:
+        # Logged explicitly: the variable is set but production refuses it, and
+        # a silent override would look like the setting was ignored.
+        logger.warning(
+            "DEMO_HYDRATE_EMPTY_DB is set but disabled in production: "
+            "synthetic observations must not be presented as recent measurements"
+        )
+    else:
+        logger.info("Demo hydration disabled (no synthetic observations will be created)")
 
     # 5. Optional control-room cache pre-warm. Render's free tier wakes in ~76 s
     # and the dashboard then fans out ~14 requests, several of which are ~11 s

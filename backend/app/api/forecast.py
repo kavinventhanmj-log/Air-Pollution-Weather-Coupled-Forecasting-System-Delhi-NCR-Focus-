@@ -145,6 +145,7 @@ def generate_coupled_forecast(
     horizons = list(dict.fromkeys(req.horizons))
     try:
         features, coverage = forecast_service.build_features_from_db_with_meta(db, station.id)
+        feature_contract = forecast_service.audit_feature_contract(features, horizons)
         result = forecast_service.generate_coupled_forecast(db, station.id, horizons)
     except forecast_service.InsufficientDataError as exc:
         # Refuse before anything is persisted: a forecast that cannot be modelled
@@ -167,6 +168,7 @@ def generate_coupled_forecast(
         coverage=coverage,
         horizons=horizons,
         model_label="coupled-two-way",
+        feature_contract=feature_contract,
     )
     record_forecast_run(
         db,
@@ -224,8 +226,23 @@ def generate_forecast(
     # condition and risk a second code path reaching persistence.
     try:
         coverage = forecast_service.station_data_sufficiency(db, station.id)
+        # The same feature vector the engines will use, so the contract audit
+        # below reflects the inputs actually served rather than a re-derivation.
+        features, _ = forecast_service.build_features_from_db_with_meta(db, station.id)
     except forecast_service.InsufficientDataError as exc:
         raise _insufficient(exc) from exc
+
+    # Audit the serving-time model-input contract before anything is published.
+    # Read-only, and deliberately not fatal: when required inputs are missing
+    # the ML path is bypassed in favour of the validated fallback, and the audit
+    # is attached to the response so the published provenance says so.
+    feature_contract = forecast_service.audit_feature_contract(features, horizons)
+    if not feature_contract["usable"]:
+        logger.warning(
+            "Model feature contract not satisfied for %s: %s; the ML path is bypassed",
+            station.name,
+            feature_contract["reason"],
+        )
 
     fallback_reason = None
     try:
@@ -306,6 +323,7 @@ def generate_forecast(
         horizons=horizons,
         model_label=model_label,
         fallback_reason=fallback_reason,
+        feature_contract=feature_contract,
     )
     record_forecast_run(
         db,

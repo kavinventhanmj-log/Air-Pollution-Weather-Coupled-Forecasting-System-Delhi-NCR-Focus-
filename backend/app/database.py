@@ -129,7 +129,54 @@ def run_migrations() -> bool:
     cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
     cfg.set_main_option("db_url", settings.database_url)
     command.upgrade(cfg, "head")
+
+    # Confirm the chain actually reached head. `upgrade` returning 0 is not
+    # sufficient evidence on its own: a database that was stamped at a lower
+    # revision without the corresponding schema changes will upgrade cleanly
+    # and still be missing constraints. Verified against a live deployment in
+    # the SIH26082 release audit, where the running revision was well behind
+    # head and the forecast uniqueness constraint did not exist.
+    from sqlalchemy import inspect as _inspect
+
+    inspector = _inspect(engine)
+    if "alembic_version" not in inspector.get_table_names():
+        raise RuntimeError(
+            "Alembic reported success but the database has no alembic_version "
+            "table. The schema is not managed by migrations; refusing to serve."
+        )
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT version_num FROM alembic_version")).first()
+    current = row[0] if row else None
+    if current is None:
+        raise RuntimeError(
+            "Alembic reported success but alembic_version is empty. The schema "
+            "state is unknown; refusing to serve."
+        )
+
+    heads = _alembic_heads()
+    if heads and current not in heads:
+        raise RuntimeError(
+            f"Database is stamped at revision {current!r} but the migration chain "
+            f"head is {sorted(heads)[0]!r}. The running schema is behind the code. "
+            "Refusing to serve rather than reporting a healthy service against a "
+            "stale schema."
+        )
+    logger.info("Alembic head verified: %s", current)
     return True
+
+
+def _alembic_heads() -> set[str]:
+    """Return the revision ids Alembic considers the current head(s).
+
+    Read from the migration scripts on disk rather than shelling out, so the
+    check works at import time in any environment.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(_REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+    return set(ScriptDirectory.from_config(cfg).get_heads())
 
 
 def apply_migrations():

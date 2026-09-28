@@ -52,6 +52,34 @@ def _table_names(engine) -> set[str]:
     return set(inspect(engine).get_table_names())
 
 
+def _create_complete_legacy_schema(engine) -> None:
+    """Build a pre-Alembic schema that genuinely matches what head describes.
+
+    This is the only shape the stamp branch is allowed to accept. An earlier
+    version of these tests used a database holding just ``stations`` and
+    ``forecast_runs`` and asserted that it was stamped -- which is precisely the
+    defect the SIH26082 audit found in production, where a database missing the
+    forecast uniqueness constraint was stamped as current and the service went
+    on appending duplicate rows per horizon.
+    """
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE stations (id INTEGER PRIMARY KEY, name VARCHAR(100))")
+        conn.exec_driver_sql("CREATE TABLE forecast_runs (id INTEGER PRIMARY KEY, status VARCHAR(20))")
+        conn.exec_driver_sql(
+            "CREATE TABLE pollution_observations (id INTEGER PRIMARY KEY, station_id INTEGER, "
+            "timestamp DATETIME, re_stamped BOOLEAN NOT NULL DEFAULT 0, "
+            "UNIQUE (station_id, timestamp))"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE weather_observations (id INTEGER PRIMARY KEY, station_id INTEGER, "
+            "timestamp DATETIME, UNIQUE (station_id, timestamp))"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE forecasts (id INTEGER PRIMARY KEY, station_id INTEGER, "
+            "horizon_hours INTEGER, UNIQUE (station_id, horizon_hours))"
+        )
+
+
 def test_script_is_importable_without_a_database(monkeypatch):
     """Module import must not require a reachable database.
 
@@ -173,9 +201,7 @@ def test_current_revision_is_none_for_unversioned_database(tmp_path):
 def test_status_mode_writes_nothing(tmp_path, monkeypatch):
     """``--status`` is documented as read-only; prove it makes no changes."""
     engine = _engine(tmp_path, "status.db")
-    with engine.begin() as conn:
-        conn.exec_driver_sql("CREATE TABLE stations (id INTEGER PRIMARY KEY, name VARCHAR(100))")
-        conn.exec_driver_sql("CREATE TABLE forecast_runs (id INTEGER PRIMARY KEY)")
+    _create_complete_legacy_schema(engine)
 
     called = []
     monkeypatch.setattr(migrate_safely, "_alembic", lambda *a: called.append(a) or 0)
@@ -193,11 +219,9 @@ def test_status_mode_writes_nothing(tmp_path, monkeypatch):
 
 
 def test_legacy_database_takes_the_stamp_branch(tmp_path, monkeypatch):
-    """Unversioned + complete schema must stamp, not upgrade."""
+    """Unversioned + genuinely complete schema must stamp, not upgrade."""
     engine = _engine(tmp_path, "stamp.db")
-    with engine.begin() as conn:
-        conn.exec_driver_sql("CREATE TABLE stations (id INTEGER PRIMARY KEY, name VARCHAR(100))")
-        conn.exec_driver_sql("CREATE TABLE forecast_runs (id INTEGER PRIMARY KEY)")
+    _create_complete_legacy_schema(engine)
 
     called = []
     monkeypatch.setattr(migrate_safely, "_alembic", lambda *a: called.append(a) or 0)
@@ -207,6 +231,46 @@ def test_legacy_database_takes_the_stamp_branch(tmp_path, monkeypatch):
 
     assert rc == 0
     assert called == [("stamp", "head")], "legacy database must be stamped, not upgraded"
+
+
+def test_legacy_database_missing_the_uniqueness_constraint_is_refused(tmp_path, monkeypatch):
+    """Tables present is not enough; the constraint is the thing that matters.
+
+    This is the live production shape: every application table existed, so the
+    old name-based check stamped it as current, and the service then wrote a new
+    forecast row for every horizon on every run without the database object that
+    would have stopped it.
+    """
+    engine = _engine(tmp_path, "nounique.db")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE stations (id INTEGER PRIMARY KEY, name VARCHAR(100))")
+        conn.exec_driver_sql("CREATE TABLE forecast_runs (id INTEGER PRIMARY KEY, status VARCHAR(20))")
+        conn.exec_driver_sql(
+            "CREATE TABLE pollution_observations (id INTEGER PRIMARY KEY, station_id INTEGER, "
+            "timestamp DATETIME, re_stamped BOOLEAN NOT NULL DEFAULT 0, "
+            "UNIQUE (station_id, timestamp))"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE weather_observations (id INTEGER PRIMARY KEY, station_id INTEGER, "
+            "timestamp DATETIME, UNIQUE (station_id, timestamp))"
+        )
+        # forecasts deliberately WITHOUT UNIQUE(station_id, horizon_hours)
+        conn.exec_driver_sql(
+            "CREATE TABLE forecasts (id INTEGER PRIMARY KEY, station_id INTEGER, horizon_hours INTEGER)"
+        )
+
+    called = []
+    monkeypatch.setattr(migrate_safely, "_alembic", lambda *a: called.append(a) or 0)
+    monkeypatch.setattr("app.database.engine", engine)
+
+    rc = migrate_safely.main([])
+
+    assert rc == 1
+    assert called == [], "an unverifiable schema must not be stamped"
+    con = sqlite3.connect(tmp_path / "nounique.db")
+    tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+    con.close()
+    assert "alembic_version" not in tables
 
 
 def test_versioned_database_takes_the_upgrade_branch(tmp_path, monkeypatch):

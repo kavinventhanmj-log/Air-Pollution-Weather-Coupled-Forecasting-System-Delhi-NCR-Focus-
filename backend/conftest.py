@@ -132,6 +132,12 @@ def _seed_test_data(session):
 
 @pytest.fixture()
 def db_session():
+    # Release every pooled connection before dropping the schema. On PostgreSQL
+    # ``DROP TABLE`` needs an AccessExclusiveLock, which deadlocks against the
+    # AccessShareLock still held by the session-scoped ``client`` fixture's
+    # connection. SQLite has no such lock, so this only ever bit the CI job that
+    # runs the suite against PostgreSQL.
+    engine.dispose()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as session:

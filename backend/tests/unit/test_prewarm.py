@@ -183,14 +183,28 @@ def test_prewarm_defaults_to_on_in_production_and_off_elsewhere():
     whole cold-start fix was silently inert in production, verifiable only by
     hand-timing requests. Production is where the ~76 s cold wake makes ~75 s of
     off-request-path CPU worth paying, so it is the default there.
+
+    A production ``Settings`` now has to satisfy the release's fail-closed
+    validator, so the secret and database URL are supplied explicitly here. That
+    is itself part of the contract being tested: a production configuration that
+    cannot be built is not a configuration, and the pre-warm default is only
+    meaningful for one that can.
     """
     from app.config import Settings
 
-    assert Settings(environment="production").prewarm_enabled is True
+    production = {
+        "environment": "production",
+        "secret_key": "k" * 48,
+        "database_url": "postgresql://user:pass@db.example.com:5432/aerocast_ncr",
+        "enable_demo_user": False,
+        "demo_hydrate_empty_db": False,
+    }
+
+    assert Settings(**production).prewarm_enabled is True
     assert Settings(environment="development").prewarm_enabled is False
     assert Settings(environment="test").prewarm_enabled is False
     # An explicit setting always wins, in either direction.
-    assert Settings(environment="production", control_room_prewarm=False).prewarm_enabled is False
+    assert Settings(**production, control_room_prewarm=False).prewarm_enabled is False
     assert Settings(environment="development", control_room_prewarm=True).prewarm_enabled is True
 
 

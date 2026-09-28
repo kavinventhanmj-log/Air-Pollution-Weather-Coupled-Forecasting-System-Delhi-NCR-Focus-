@@ -53,8 +53,15 @@ jobs:
         run: python -m alembic upgrade head
       - name: Verify migration is at head
         run: python -m alembic current
-      - name: Run integration/API tests against PostgreSQL
-        run: python -m pytest backend/tests/integration backend/tests/test_api.py -q --tb=short -p no:cacheprovider
+      # Includes test_b8d3_*.py, which builds a PostgreSQL database shaped like
+      # the production defect (duplicate forecast rows, orphaned station rows,
+      # no uniqueness constraint) and runs the real head migration against it.
+      # That revision deletes rows, so it is only exercised here and never
+      # against a live database.
+      - name: Run integration/API/migration tests against PostgreSQL
+        run: >-
+          python -m pytest backend/tests/integration backend/tests/test_api.py
+          backend/tests/unit/test_migration_integrity.py -q --tb=short -p no:cacheprovider
 
   frontend:
     name: Frontend build (tsc + vite)

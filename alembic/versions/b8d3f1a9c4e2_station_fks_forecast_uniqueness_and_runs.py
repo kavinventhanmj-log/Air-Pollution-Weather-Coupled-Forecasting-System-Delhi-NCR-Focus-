@@ -58,6 +58,19 @@ FK_CONSTRAINTS = {
 }
 
 
+def _existing_tables() -> set[str]:
+    """The tables actually present, so absent ones can be skipped.
+
+    Needed because a pre-Alembic database does not necessarily hold every table
+    the current ORM declares: ``alerts`` was added to the schema after some
+    deployments were already serving. Touching it unconditionally made this
+    revision abort with ``relation "alerts" does not exist``, which fails the
+    whole preDeploy step and leaves the release unable to ship -- for a table
+    that simply has no data to constrain.
+    """
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
 def _delete_orphans(table: str) -> None:
     """Remove rows whose station_id no longer resolves to a station.
 
@@ -111,7 +124,16 @@ def upgrade() -> None:
     #     manual review instead of silently rewriting them.
 
     # -- 2. station_id foreign keys -----------------------------------------
-    for table in FK_TABLES:
+    # Skipped for any table this database does not have. A pre-Alembic database
+    # predates some of these tables, and a missing table has no orphans to clean
+    # and no rows to constrain; failing the deploy over it would be strictly
+    # worse than leaving it alone.
+    present = _existing_tables()
+    fk_tables = tuple(t for t in FK_TABLES if t in present)
+    for skipped in (t for t in FK_TABLES if t not in present):
+        print(f"[{skipped}] table not present in this database; skipping its foreign key")
+
+    for table in fk_tables:
         _delete_orphans(table)
 
     # SQLite cannot ALTER TABLE to add a constraint; it needs a table rebuild.
@@ -119,7 +141,8 @@ def upgrade() -> None:
     # also drops the id sequence the table owns, breaking all later inserts with
     # "relation <table>_id_seq does not exist".
     is_sqlite = op.get_bind().dialect.name == 'sqlite'
-    for table, name in FK_CONSTRAINTS.items():
+    for table in fk_tables:
+        name = FK_CONSTRAINTS[table]
         if is_sqlite:
             with op.batch_alter_table(table, naming_convention={'fk': name}) as batch:
                 batch.create_foreign_key(
@@ -212,7 +235,11 @@ def downgrade() -> None:
     with op.batch_alter_table('forecasts', naming_convention={'uq': 'uq_forecast_station_horizon'}) as batch:
         batch.drop_constraint('uq_forecast_station_horizon', type_='unique')
 
-    for table in reversed(FK_TABLES):
+    # Mirrored from upgrade(): a table that was absent on the way up has no
+    # constraint to drop, and downgrade must not fail on the same database shape
+    # upgrade was written to tolerate.
+    present = _existing_tables()
+    for table in reversed([t for t in FK_TABLES if t in present]):
         name = FK_CONSTRAINTS[table]
         with op.batch_alter_table(table, naming_convention={'fk': name}) as batch:
             batch.drop_constraint(name, type_='foreignkey')

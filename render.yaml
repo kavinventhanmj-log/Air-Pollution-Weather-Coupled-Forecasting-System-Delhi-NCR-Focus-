@@ -11,9 +11,21 @@
 #   3. Fill in the `sync: false` secrets from the Render dashboard:
 #        DATABASE_URL     = postgresql://user:pass@host/db?sslmode=require
 #        CORS_ORIGINS     = https://<your-app>.vercel.app
-#        SECRET_KEY       = a long random string
+#        SECRET_KEY       = a long random string (>=32 chars, and NOT the
+#                           development placeholder in backend/app/config.py --
+#                           a production boot now refuses to start with it)
 #        NASA_FIRMS_MAP_KEY / DATA_GOV_API_KEY / IMD_API_KEY  (optional)
-#        DEMO_USER_PASSWORD  = a strong demo-seed password
+#
+#   4. Deploy manually (autoDeploy is off -- see below). Read the deploy log:
+#      the app now refuses to start on an insecure production configuration, so a
+#      failed boot names the exact setting rather than serving predictably.
+#
+# NOTE ON THE PRE-DEPLOY MIGRATION: the current head revision b8d3f1a9c4e2
+# deletes orphaned station-linked rows and collapses duplicate forecast rows in
+# order to add UNIQUE(station_id, horizon_hours). Take and verify a database
+# backup, and get explicit approval, before deploying a build that reaches that
+# revision. `migrate_safely.py` will refuse to stamp a legacy database that
+# cannot be shown to carry the required constraints.
 #
 # NOTE: The repo-root working directory is intentional. Uvicorn starts as
 # `backend.app.main:app` so that `ml/`, `models/`, `data/` and `alembic.ini`
@@ -25,14 +37,31 @@ services:
     name: aerocast-backend
     runtime: python
     plan: free
-    pythonVersion: 3.11.9
+    # 3.12 matches .github/workflows/ci.yml, the Dockerfile and local
+    # development. It was pinned to 3.11.9, so the deployed interpreter was the
+    # one version combination nothing was ever tested against; pandas/numpy
+    # resolution differed from CI and a green run proved nothing about the
+    # service that actually served traffic.
+    pythonVersion: 3.12
     # DB-free liveness probe. `/health` additionally round-trips Postgres, so
     # pointing readiness at it makes Render keep the service "not ready" while a
     # pooled/free database is still waking. `/api/health` returns as soon as the
     # process accepts connections; database readiness is proven by the data
     # endpoints themselves, which now retry on transient failures.
     healthCheckPath: /api/health
-    autoDeploy: true
+    # Deploys are triggered manually.
+    #
+    # `preDeployCommand` runs `migrate_safely.py`, and the head revision
+    # b8d3f1a9c4e2 deletes orphaned station-linked rows and collapses duplicate
+    # forecast rows in order to add UNIQUE(station_id, horizon_hours). That is
+    # irreversible, and autoDeploy would apply it to the live database the
+    # moment anything was pushed -- with no backup taken and no operator in the
+    # loop. The SIH26082 release also requires an explicit approval plus a
+    # verified backup before that revision reaches production.
+    #
+    # With autoDeploy off, a push cannot mutate the database. Turn it back on
+    # only once the migration has been reviewed and the backup verified.
+    autoDeploy: false
     buildCommand: pip install -r backend/requirements.txt
     # Apply schema migrations before the new release starts serving. Without this
     # the app boots against a stale schema and every request that touches a new
@@ -67,16 +96,30 @@ services:
         sync: false
       - key: DEMO_USER_PASSWORD
         sync: false
+      # The demo account is off in production. Left unset it resolves to off
+      # (see `Settings.demo_user_enabled`), so the published development
+      # password can no longer authenticate against the live deployment --
+      # which it did until the SIH26082 audit found it working.
+      - key: ENABLE_DEMO_USER
+        value: "false"
       - key: LIVE_REFRESH_ENABLED
         value: "true"
       - key: LIVE_REFRESH_INTERVAL_HOURS
         value: "3"
-      # Opt-in demo self-hydration: loads the bundled coupled dataset + model
-      # metrics + alerts and re-stamps recent observations into the last 24h
-      # whenever pollution or weather has no reading in that window, so a fresh
-      # or stale database renders a live-looking dashboard without manual steps.
+      # Synthetic self-hydration is off in production.
+      #
+      # This used to be "true", which re-stamped a copy of the bundled training
+      # data into the last 24 hours whenever the database had no recent reading.
+      # The dashboard then rendered rows that looked like live sensor
+      # measurements. `Settings.demo_hydration_enabled` is now False whenever the
+      # environment is production, so this key cannot re-enable it; a production
+      # boot also fails outright if it is set to true rather than quietly
+      # ignoring the request.
+      #
+      # Real ingest comes from LIVE_REFRESH_ENABLED above. An empty database now
+      # reports itself as empty instead of manufacturing history.
       - key: DEMO_HYDRATE_EMPTY_DB
-        value: "true"
+        value: "false"
       # Cold-start cache pre-warm. The free tier wakes in ~76 s and the dashboard
       # then fans out ~14 requests, several of them ~11 s aggregations over the
       # pooled database; warming the TTL cache in the background after boot makes

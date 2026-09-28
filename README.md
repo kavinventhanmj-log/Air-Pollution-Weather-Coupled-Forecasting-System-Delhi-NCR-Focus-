@@ -7,12 +7,12 @@
 ---
 
 [![CI](https://github.com/methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-/actions/workflows/ci.yml/badge.svg)](https://github.com/methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-941%20passed-success)](backend/tests)
+[![Tests](https://img.shields.io/badge/tests-1071%20passed-success)](backend/tests)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Frontend](https://img.shields.io/badge/frontend-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forec-eight.vercel.app)
-[![Backend](https://img.shields.io/badge/backend-status%3A%20unverified-lightgrey?logo=render)](docs/deployment.md)
+[![Backend](https://img.shields.io/badge/backend-status%3A%20live-success?logo=render)](docs/deployment.md)
 
 AeroCast-NCR fuses **official CPCB real-time monitoring (data.gov.in)**,
 **Open-Meteo weather**, **NASA FIRMS active fires**, **ERA5 meteorology**,
@@ -28,12 +28,18 @@ prediction intervals) and honest (gated real engines, openly-reported skill).
 >
 > The **frontend** is live and serving: <https://air-pollution-weather-coupled-forec-eight.vercel.app>
 >
-> The **backend** at `air-pollution-weather-coupled.onrender.com` was **not
-> responding** at the time of writing (both `/health` and `/api/health` timed
-> out; the Vercel `/api/*` proxy times out as a consequence). Treat the hosted
-> API as unverified — run the stack locally with the Quick Start below, or follow
-> [`docs/deployment.md`](docs/deployment.md) to bring the backend up and verify
-> it yourself before relying on any hosted number.
+> The **backend** at `air-pollution-weather-coupled.onrender.com` is **up and
+> serving** (`/api/system` returns `{"database": "connected",
+> "environment": "production"}`; `/api/forecast/Anand Vihar` returns 200 with
+> real rows). Health endpoints are deliberately lightweight and may time out on
+> the free tier on cold start; the data endpoints are the live signal.
+>
+> The hosted backend currently runs **older code** than this branch: its
+> `/api/system` reports `demo_hydrate_empty_db: true` and it does not yet carry
+> the fail-closed startup guards (production refuses to boot on the published
+> secret, the demo account, or synthetic hydration) or the feature-contract
+> audit. Those protections ship with the next deploy, which also requires a
+> verified database backup first (see *Database & Migrations*).
 >
 > The database credentials previously committed to local environment files have
 > been treated as compromised and should be **rotated**; this repository ships
@@ -352,10 +358,16 @@ mark would have the **whole chain replayed against itself** — every
 failure is non-idempotent the next deploy fails identically. Stamping is correct
 there because those tables were built by `create_all()` from the same ORM
 metadata the chain is generated from, so they are already at head. Blindly
-stamping is *also* wrong, though, so the script refuses when a legacy database
-is missing tables added by recent migrations (e.g. `forecast_runs`) — claiming
-head there would hide a real gap until runtime. Use `--status` to inspect
-without writing, and `--force-upgrade` to replay deliberately.
+stamping is *also* wrong, though: table presence is a **necessary** condition,
+not sufficient. Before stamping, `migrate_safely.py` verifies the concrete
+objects this release adds — the `forecast_runs` table, the
+`pollution_observations.re_stamped` column, and the `forecasts`
+`UNIQUE(station_id, horizon_hours)` (plus `weather_observations`
+`UNIQUE(station_id, timestamp)`) constraints. A database that holds every table
+but lacks the uniqueness constraint — the exact live-deployment shape that had
+been stamped current while appending duplicate forecast rows per horizon — is
+refused, so claiming head cannot hide a real gap until runtime. Use `--status`
+to inspect without writing, and `--force-upgrade` to replay deliberately.
 
 **Cross-dialect correctness.** The chain is verified in both directions against a
 throwaway PostgreSQL 16 *and* SQLite: `upgrade head` → `downgrade base` →
@@ -698,7 +710,9 @@ tree, not a roadmap item.
 - **Empty-state GET endpoints are not uniformly explicit.** `/api/forecast/{station}`,
   `/api/summary`, `/api/grid/*`, and `/api/pollution/*` do not all yet return a
   dedicated empty/provenance payload the way the forecast-generation paths do.
-- **The hosted backend is unverified** — see
+- **The hosted backend runs pre-guard code.** It is live, but it predates the
+  fail-closed startup protections, the feature-contract audit, and the
+  `autoDeploy: false` migration gate on this branch — see
   [Deployment status](#deployment-status-verified-2026-09-28) above.
 
 ## Contributing & Security

@@ -1,6 +1,7 @@
 import pathlib
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 _ENV_CANDIDATES = [
@@ -9,6 +10,15 @@ _ENV_CANDIDATES = [
     pathlib.Path.cwd() / ".env",
 ]
 _ENV_FILE = next((str(p) for p in _ENV_CANDIDATES if p.exists()), ".env")
+
+#: The development default JWT signing key. Published in this repository, so it
+#: is only ever a placeholder: production must override it, and
+#: ``Settings.validate_production_config`` refuses to boot while it is in use.
+DEV_SECRET_KEY = "aerocast-dev-secret-change-me-in-production"
+
+#: The published demo password, also a development-only placeholder.
+DEV_DEMO_PASSWORD = "AeroCast@2026"
+
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./aerocast_ncr.db"
@@ -69,15 +79,115 @@ class Settings(BaseSettings):
     imd_api_base: str = "https://api.imd.gov.in/api/v1"
 
     # --- Authentication (SIH26082 UI login layer) ---
-    secret_key: str = "aerocast-dev-secret-change-me-in-production"
+    # The default below is a development placeholder. It is public in the
+    # repository, so it must never sign a token in production --
+    # ``validate_production_config`` refuses to boot if it is still in use.
+    secret_key: str = DEV_SECRET_KEY
     access_token_expire_minutes: int = 480  # 8 hours — one operational shift
     # Demo account seeded at startup; override via DEMO_USER_* env vars.
     demo_user_email: str = "analyst@aerocast.in"
     demo_user_name: str = "Demo Analyst"
     demo_user_role: str = "Analyst"
-    demo_user_password: str = "AeroCast@2026"
+    # Also a published default. Production must supply its own value, and
+    # ``enable_demo_user`` must be false, so the seeded account cannot
+    # authenticate with a credential that is published in the source.
+    demo_user_password: str = DEV_DEMO_PASSWORD
+    # Whether startup seeds the demo account at all. Default follows the
+    # environment: off in production, on for local dev/CI. An explicit value
+    # always wins, so a staging deployment can opt in deliberately.
+    enable_demo_user: bool | None = None
 
     model_config = {"env_file": _ENV_FILE}
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
+
+    @property
+    def demo_user_enabled(self) -> bool:
+        """Whether the demo account is created at startup.
+
+        An explicit ``ENABLE_DEMO_USER`` always wins. Unset, it follows the
+        environment: production never seeds it, because both the address and the
+        default password are published in this repository, so anyone could log
+        in to a live deployment. Local dev and CI keep it so the login page
+        remains usable out of the box.
+        """
+        if self.enable_demo_user is not None:
+            return self.enable_demo_user
+        return not self.is_production
+
+    @property
+    def demo_hydration_enabled(self) -> bool:
+        """Whether startup may synthesise observations to fill data gaps.
+
+        An explicit ``DEMO_HYDRATE_EMPTY_DB`` wins for every non-production
+        environment. In production it is forced off: re-stamping an archive
+        into the recent window makes synthetic rows look like fresh sensor
+        measurements, which is the fabrication the provenance columns
+        (``re_stamped``, ``data_source``) exist to prevent.
+        """
+        if self.is_production:
+            return False
+        return self.demo_hydrate_empty_db
+
+    @model_validator(mode="after")
+    def validate_production_config(self) -> "Settings":
+        """Fail closed on configurations that are unsafe in production.
+
+        Each of these is a silent-failure mode found in the release audit:
+        a known JWT signing key lets anyone mint an admin token; a missing
+        ``DATABASE_URL`` falls back to an empty local SQLite file while the
+        service still reports healthy; the published demo password would seed
+        a working login; and demo hydration would manufacture observations.
+
+        Refusing to start is the only reliable response -- every one of these
+        otherwise starts "successfully" and fails open at runtime.
+        """
+        if not self.is_production:
+            return self
+
+        problems: list[str] = []
+
+        if self.secret_key == DEV_SECRET_KEY or self.secret_key.strip() == "":
+            problems.append(
+                "SECRET_KEY is unset or still the published development default. "
+                "Set SECRET_KEY to a long random value in the deployment "
+                "provider's secret store."
+            )
+        elif len(self.secret_key) < 32:
+            problems.append(
+                f"SECRET_KEY is only {len(self.secret_key)} characters; "
+                "at least 32 are required to sign HS256 tokens in production."
+            )
+
+        if not self.database_url or self.database_url.startswith("sqlite"):
+            problems.append(
+                "DATABASE_URL is unset or points at SQLite. Production must "
+                "use PostgreSQL; a SQLite fallback serves an empty database "
+                "while reporting healthy."
+            )
+
+        if self.demo_user_enabled:
+            problems.append(
+                "ENABLE_DEMO_USER is on in production, and the demo address and "
+                "password are published in this repository. Set "
+                "ENABLE_DEMO_USER=false."
+            )
+
+        if self.demo_hydrate_empty_db:
+            problems.append(
+                "DEMO_HYDRATE_EMPTY_DB is on in production, which synthesises "
+                "observations and presents them as recent measurements. Set "
+                "DEMO_HYDRATE_EMPTY_DB=false."
+            )
+
+        if problems:
+            raise ValueError(
+                "Refusing to start in production with an unsafe configuration:"
+                + "".join(f"\n  - {p}" for p in problems)
+            )
+        return self
 
     @property
     def prewarm_enabled(self) -> bool:

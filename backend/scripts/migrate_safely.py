@@ -28,10 +28,17 @@ state         present
 The ``unversioned`` branch is the one that matters in production. It stamps
 rather than upgrades because the schema was created from the same ORM metadata
 the migration chain is generated from, so the tables are already at (or close to)
-head; replaying the chain against them can only fail. A mismatch introduced
-between those two points would be missed, which is why the script prints a loud
-verification notice and a follow-up ``alembic check`` hint rather than staying
-silent.
+head; replaying the chain against them can only fail.
+
+Table presence is not sufficient evidence to stamp, though. A database can have
+``stations`` and ``forecast_runs`` and still be missing the constraints and
+columns those revisions added, and stamping would then claim a shape the
+database does not have -- which is exactly how a live deployment came to serve
+duplicate forecast rows per horizon under a schema stamped as current. So the
+script also *verifies* the concrete objects the recent revisions add, and
+refuses to stamp when any is missing. Refusal is the safe outcome: the operator
+then chooses deliberately (``--force-upgrade``) instead of inheriting a stamp
+that hides a real gap.
 
 Usage
 -----
@@ -84,7 +91,64 @@ CORE_TABLES = ("stations",)
 #: have, so the script refuses and explains instead.
 RECENT_TABLES = ("forecast_runs",)
 
+#: Concrete schema objects the recent revisions add. Presence is necessary but
+#: not sufficient: a database can hold every application table while lacking
+#: the column or constraint that makes the data correct. Each entry is
+#: ``(description, probe)`` where ``probe`` returns a short reason string when
+#: the object is missing, or ``None`` when it is present.
+#:
+#: These are checked before any stamp. The forecast uniqueness constraint is the
+#: important one: without it every regeneration appends another row for the same
+#: (station_id, horizon_hours), so a 24-hour forecast accumulates into days of
+#: apparent history.
+REQUIRED_COLUMNS = (
+    ("pollution_observations.re_stamped", "pollution_observations", "re_stamped"),
+)
+
+REQUIRED_UNIQUE = (
+    (
+        "forecasts UNIQUE(station_id, horizon_hours)",
+        "forecasts",
+        ("station_id", "horizon_hours"),
+    ),
+    ("weather_observations UNIQUE(station_id, timestamp)", "weather_observations", ("station_id", "timestamp")),
+)
+
 LOG_PREFIX = "[migrate_safely]"
+
+
+def missing_schema_objects(tables: set[str], inspector) -> list[str]:
+    """Return a list of schema objects an ``alembic stamp head`` would falsely claim.
+
+    Read-only: inspects the live database and reports what is absent. Callers
+    refuse to stamp when this is non-empty, so a legacy database can only be
+    marked current once it genuinely carries the structure the chain describes.
+    """
+    missing: list[str] = []
+
+    for description, table, column in REQUIRED_COLUMNS:
+        if table not in tables:
+            missing.append(f"{description} (table {table} is missing entirely)")
+            continue
+        columns = {c["name"] for c in inspector.get_columns(table)}
+        if column not in columns:
+            missing.append(f"{description} (column absent)")
+
+    for description, table, expected in REQUIRED_UNIQUE:
+        if table not in tables:
+            missing.append(f"{description} (table {table} is missing entirely)")
+            continue
+        declared = {tuple(uq.get("column_names") or ()) for uq in inspector.get_unique_constraints(table)}
+        # A unique index (rather than a named constraint) satisfies the same
+        # integrity requirement, and is how the ORM declares some of these.
+        declared |= {
+            tuple(ix.get("column_names") or ()) for ix in inspector.get_indexes(table) if ix.get("unique")
+        }
+        if expected not in declared:
+            present = sorted(c for c in declared if c) or "none"
+            missing.append(f"{description} (unique constraint absent; found: {', '.join(present)})")
+
+    return missing
 
 
 def _log(message: str) -> None:
@@ -163,12 +227,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if state == "unversioned":
         missing = [t for t in RECENT_TABLES if t not in tables]
+        # Verify the shape, not just the table names. A database can hold every
+        # table and still lack the column or unique constraint that makes the
+        # data correct; stamping would record it as current and hide the gap.
+        try:
+            missing += missing_schema_objects(tables, inspect(engine))
+        except Exception as exc:  # pragma: no cover - inspection failure path
+            _log(f"could not verify the existing schema: {exc}")
+            _log("refusing to stamp a schema that could not be inspected")
+            return 1
+
         if missing and not args.force_upgrade:
             _log(
                 "this database has application tables but no alembic_version, "
-                "and is missing the recently added table(s): "
-                + ", ".join(missing)
+                "and is missing structure the recent migrations add:"
             )
+            for item in missing:
+                _log(f"  - {item}")
             _log("stamping at head would claim structure that does not exist")
             _log("re-run with --force-upgrade to replay the chain instead")
             return 1
@@ -177,8 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             _log(
                 "this is a pre-Alembic database created by Base.metadata.create_all(); "
-                "its tables come from the same ORM metadata the chain is generated "
-                "from, so it is already at head"
+                "its tables and constraints match what the chain adds"
             )
             _log("stamping head instead of replaying the chain, which could only fail")
             _log(

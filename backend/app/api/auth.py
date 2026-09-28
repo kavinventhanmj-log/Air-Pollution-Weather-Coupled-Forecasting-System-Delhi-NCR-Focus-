@@ -77,6 +77,21 @@ def _to_user_response(u: User) -> UserResponse:
     return UserResponse(id=u.id, email=u.email, name=u.name, role=u.role)
 
 
+def _is_disabled_demo_account(email: str) -> bool:
+    """Whether ``email`` is the demo account while that account is switched off.
+
+    Disabling the demo account is not enough on its own. The row already exists
+    in any database that was ever seeded, so refusing to *create* it leaves a
+    working login behind -- which is exactly the state the production audit
+    found: the published demo password still authenticated. The refusal has to
+    live on the login path as well as the seeding path.
+    """
+    settings = get_settings()
+    if settings.demo_user_enabled:
+        return False
+    return (email or "").strip().lower() == settings.demo_user_email.strip().lower()
+
+
 def get_current_user(
     authorization: str | None = Header(None, alias="Authorization"),
     db: Session = Depends(get_db),
@@ -93,6 +108,14 @@ def get_current_user(
     token = authorization.split(" ", 1)[1].strip()
     payload = decode_access_token(token, get_settings().secret_key)
     if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # A token minted before the demo account was disabled stays cryptographically
+    # valid until it expires, so the switch-off is enforced here too. Otherwise
+    # revoking the account would leave previously issued sessions working for
+    # the full token lifetime.
+    if _is_disabled_demo_account(payload.get("email", "")):
+        logger.warning("Rejected a token belonging to the disabled demo account")
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     name = payload.get("name")
@@ -114,12 +137,21 @@ def get_current_user(
 @router.post("/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     """Authenticate credentials and return a signed HS256 JWT."""
+    settings = get_settings()
+
+    # Checked before the database so a disabled demo account is refused
+    # identically whether or not the row was ever seeded, and the same
+    # "Invalid email or password" is returned to avoid confirming which
+    # addresses exist.
+    if _is_disabled_demo_account(body.email):
+        logger.warning("Rejected login for the disabled demo account")
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
     user = db.query(User).filter(User.email == body.email.lower()).first()
     if user is None or not verify_password(
         body.password, user.password_salt, user.password_hash
     ):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    settings = get_settings()
     token = create_access_token(
         user.id, user.email, settings.secret_key, name=user.name, role=user.role
     )
@@ -150,10 +182,14 @@ def logout(user: UserResponse = Depends(get_current_user)):
 def demo_credentials():
     """Expose the env-configured demo login so the UI can show a hint.
 
-    Only enabled in non-production environments; returns the account that the
-    lifespan already seeded, never a raw database credential.
+    Returns 404 whenever the demo account is switched off. The published
+    credential hint is what put the demo password in front of every visitor in
+    the first place, so it must not be served from a production deployment even
+    if the account happens to still exist in the database.
     """
     settings = get_settings()
+    if not settings.demo_user_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
     return DemoCredentials(
         email=settings.demo_user_email,
         password=settings.demo_user_password,
