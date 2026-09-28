@@ -52,12 +52,33 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 CKAN_BASE = "https://data.opencity.in/api/3/action/datastore_search"
+# Per-station datastore resources from the opencity.in package
+# "Delhi Hourly Air Quality Reports", 15-minute series for 2024-25. Keyed by the
+# station name as it appears in our own `stations` table, because that is what the
+# rows are written against; the resource's own "Station Name" column is not used
+# for matching.
+#
+# This previously carried only the five regional-composite stations, so every
+# other station in the table had *zero* pollution rows and the PM2.5 forecast,
+# its SHAP explanation and the observed-vs-forecast verification panel all
+# refused with "No pollution readings for station". Faridabad, Noida Sector-62
+# and Teri Gram have no resource in that package (they sit outside Delhi) and
+# are reported as insufficient by /api/pollution/coverage rather than filled in.
 CKAN_RESOURCES = {
-    "Anand_Vihar": "5ef3f66f-2bb0-4593-91db-ba6e693a77f3",
-    "RK_Puram": "d9dfd28d-038d-448f-8e33-5e6f6b32d15c",
+    "Anand Vihar": "5ef3f66f-2bb0-4593-91db-ba6e693a77f3",
+    "RK Puram": "d9dfd28d-038d-448f-8e33-5e6f6b32d15c",
     "ITO": "890f786d-fb9f-475e-8516-191bfa1b01ea",
     "Dwarka": "495db3d4-5683-4b1d-9b7d-34ecb887ca13",
-    "Punjabi_Bagh": "82080ddc-e094-4a3a-8421-242ec6bc8a45",
+    "Punjabi Bagh": "82080ddc-e094-4a3a-8421-242ec6bc8a45",
+    "Ashok Vihar": "73703a83-f321-4b60-8748-33fb046273e0",
+    "Aya Nagar": "b64a05dc-a327-4f10-9f77-685b1fd59f0f",
+    "Jahangirpuri": "734c459f-3e47-44c7-b0b8-8270090cecf0",
+    "Lodhi Road": "99a25262-def3-4898-9f63-a65c0bbeaecd",
+    "Mundka": "3fe46cce-659f-49a7-a743-090c2557cbfd",
+    "Okhla Phase-2": "7b03c3c3-c95e-4d09-b1a8-8951b96c05b6",
+    "Shadipur": "e91c68ea-85ac-49f8-8015-dd8b04c32a71",
+    "Sirifort": "e562d0c9-cc37-4d5a-a04e-fd95ee9f2f04",
+    "Vivek Vihar": "19172e66-45d4-4d3c-8736-e573b160fe99",
 }
 
 HOURLY_VARS = (
@@ -311,14 +332,7 @@ def refresh_pollution(db, dry_run: bool = False) -> int:
         "NH3 (ug/m3)": "nh3",
     }
     inserted = 0
-    for raw_name, resource_id in CKAN_RESOURCES.items():
-        display = {
-            "Anand_Vihar": "Anand Vihar",
-            "RK_Puram": "RK Puram",
-            "ITO": "ITO",
-            "Dwarka": "Dwarka",
-            "Punjabi_Bagh": "Punjabi Bagh",
-        }[raw_name]
+    for display, resource_id in CKAN_RESOURCES.items():
         if display not in stations:
             continue
         try:
@@ -335,7 +349,7 @@ def refresh_pollution(db, dry_run: bool = False) -> int:
             resp.raise_for_status()
             records = resp.json().get("result", {}).get("records", [])
         except Exception as exc:
-            logger.warning("CKAN fetch failed for %s: %s", raw_name, exc)
+            logger.warning("CKAN fetch failed for %s: %s", display, exc)
             continue
         if not records:
             continue

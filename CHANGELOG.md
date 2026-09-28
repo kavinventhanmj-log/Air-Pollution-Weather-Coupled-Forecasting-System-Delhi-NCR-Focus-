@@ -3,6 +3,41 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.21.0] - 2026-09-29
+
+### Fixed
+
+- **The PM2.5 forecast, its SHAP explanation and the observed-vs-forecast
+  verification panel no longer 500 on a lagging weather feed.** The feature row
+  is anchored on the latest *pollution* observation, so whenever the pollution
+  feed lags the weather feed the weather query returns zero rows — and
+  `pd.DataFrame([])` has no columns at all, while `align_observations` indexes
+  `wx["timestamp"]` unconditionally. That raised `KeyError: 'timestamp'` inside
+  `build_feature_row`, which the API surfaced as
+  `500 PM2.5 forecast failed: 'timestamp'` and
+  `500 PM2.5 explanation failed: 'timestamp'` (the dashboard's "Why this
+  forecast" panel then reported "Couldn't reach the explainability service",
+  and the verification chart stayed empty because it needs a loaded PM2.5
+  forecast). `_query_weather`/`_query_pollution` now return a zero-row frame
+  that still carries its columns, so the exogenous features arrive as `None`
+  and the model is still run on the real target-derived features rather than
+  the request failing.
+
+### Changed
+
+- **Pollution refresh covers every Delhi station the opencity.in package
+  publishes.** `CKAN_RESOURCES` listed only the five regional-composite
+  monitors, so the other stations in the `stations` table had *zero* pollution
+  rows and the PM2.5 forecast, its explanation and the verification panel all
+  refused with `No pollution readings for station`. Nine further per-station
+  datastore resources are now configured (Ashok Vihar, Aya Nagar,
+  Jahangirpuri, Lodhi Road, Mundka, Okhla Phase-2, Shadipur, Sirifort,
+  Vivek Vihar), bringing coverage to 14 of 17 stations. The map is now keyed by
+  our own station names, so the hardcoded rename table is gone. Faridabad,
+  Noida Sector-62 and Teri Gram have no resource in that package (they sit
+  outside Delhi) and are still reported as `insufficient_history` by
+  `/api/pollution/coverage` rather than being filled in.
+
 ## [1.20.0] - 2026-09-29
 
 ### Changed

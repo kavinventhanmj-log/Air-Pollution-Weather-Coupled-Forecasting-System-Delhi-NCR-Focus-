@@ -73,6 +73,18 @@ def get_pm25_forecaster():
     return _forecaster
 
 
+def _empty_frame(columns: list[str]) -> pd.DataFrame:
+    """A zero-row frame that still carries ``columns``.
+
+    ``pd.DataFrame([])`` has *no* columns, and every downstream consumer indexes
+    a column unconditionally (``align_observations`` does ``wx["timestamp"]``).
+    A window with no rows must therefore still be shaped like a window, so the
+    exogenous features arrive as NaN and are handled by the model rather than
+    crashing the request.
+    """
+    return pd.DataFrame({c: pd.Series(dtype="object") for c in columns})
+
+
 def _query_pollution(db, station_id: int, since, until=None) -> pd.DataFrame:
     query = db.query(PollutionReading).filter(
         PollutionReading.station_id == station_id,
@@ -81,6 +93,8 @@ def _query_pollution(db, station_id: int, since, until=None) -> pd.DataFrame:
     if until is not None:
         query = query.filter(PollutionReading.timestamp <= until)
     rows = query.order_by(PollutionReading.timestamp).all()
+    if not rows:
+        return _empty_frame(["station_id", "timestamp", "pm25"])
     return pd.DataFrame([{"station_id": r.station_id, "timestamp": r.timestamp, "pm25": r.pm25} for r in rows])
 
 
@@ -92,6 +106,8 @@ def _query_weather(db, station_id: int, since, until=None) -> pd.DataFrame:
     if until is not None:
         query = query.filter(WeatherReading.timestamp <= until)
     rows = query.order_by(WeatherReading.timestamp).all()
+    if not rows:
+        return _empty_frame(_weather_cols)
     return pd.DataFrame([{c: getattr(r, c) for c in _weather_cols} for r in rows])
 
 

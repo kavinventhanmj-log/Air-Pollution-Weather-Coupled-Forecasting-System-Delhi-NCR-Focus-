@@ -10,6 +10,7 @@ from __future__ import annotations
 import pathlib
 import tempfile
 
+import pandas as pd
 import pytest
 from app.services import pm25_forecast_service as svc
 from conftest import TINY_XGB, _make_synthetic_df
@@ -74,6 +75,38 @@ class TestBuildFeatureRow:
         # conftest seeds 12 hours of linearly-rising pm25; lag1 = last-but-one
         assert ctx["pm25_lag1"] is not None
         assert row["pm25_lag1"] == ctx["pm25_lag1"]
+
+    def test_empty_weather_window_yields_missing_features_not_a_crash(
+        self, db_session, monkeypatch
+    ):
+        """A window with no weather rows must degrade, not 500.
+
+        The feature window is anchored on the latest *pollution* observation, so
+        whenever the pollution feed lags the weather feed the weather query
+        returns zero rows. ``pd.DataFrame([])`` has no columns and
+        ``align_observations`` indexes ``wx["timestamp"]`` unconditionally, which
+        used to raise ``KeyError: 'timestamp'`` and surface as a 500 on
+        /api/forecast/pm25 and /api/forecast/pm25/explanation. The exogenous
+        features must arrive as None and the forecast must still be produced.
+        """
+        from app.models.db_models import Station
+
+        monkeypatch.setattr(svc, "_query_weather", lambda *a, **k: svc._empty_frame(svc._weather_cols))
+
+        station = db_session.query(Station).filter(Station.name == "Anand Vihar").first()
+        row, release, ctx = svc.build_feature_row(db_session, station)
+
+        assert ctx["weather_rows_in_window"] == 0
+        assert row["temperature"] is None
+        # The target-driven features are still real, so the row stays usable.
+        assert row["pm25_lag1"] is not None
+        assert release is not None
+
+    def test_empty_pollution_window_is_shaped_like_a_frame(self, db_session):
+        """A zero-row window still exposes its columns to downstream indexing."""
+        empty = svc._query_pollution(db_session, station_id=-1, since=pd.Timestamp("2000-01-01"))
+        assert empty.empty
+        assert list(empty.columns) == ["station_id", "timestamp", "pm25"]
 
 
 class TestForecastPm25:
