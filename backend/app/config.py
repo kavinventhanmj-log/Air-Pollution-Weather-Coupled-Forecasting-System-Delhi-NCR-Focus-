@@ -113,7 +113,10 @@ class Settings(BaseSettings):
         environment: production never seeds it, because both the address and the
         default password are published in this repository, so anyone could log
         in to a live deployment. Local dev and CI keep it so the login page
-        remains usable out of the box.
+        remains usable out of the box. The SIH26082 demo deployment opts the
+        account back in deliberately (``ENABLE_DEMO_USER=true``); production
+        retains the ability to refuse it, so the demo credential is never
+        implied by an accidental unset value.
         """
         if self.enable_demo_user is not None:
             return self.enable_demo_user
@@ -140,8 +143,8 @@ class Settings(BaseSettings):
         Each of these is a silent-failure mode found in the release audit:
         a known JWT signing key lets anyone mint an admin token; a missing
         ``DATABASE_URL`` falls back to an empty local SQLite file while the
-        service still reports healthy; the published demo password would seed
-        a working login; and demo hydration would manufacture observations.
+        service still reports healthy; and demo hydration would manufacture
+        observations.
 
         Refusing to start is the only reliable response -- every one of these
         otherwise starts "successfully" and fails open at runtime.
@@ -194,11 +197,18 @@ class Settings(BaseSettings):
                 "a wildcard lets any site read the API."
             )
 
-        if self.demo_user_enabled:
-            problems.append(
-                "ENABLE_DEMO_USER is on in production, and the demo address and "
-                "password are published in this repository. Set "
-                "ENABLE_DEMO_USER=false."
+        # The demo account is a deliberate opt-in: unset stays off in production,
+        # but SIH26082 ships a demo login for reviewers, so an explicit
+        # ENABLE_DEMO_USER=true is permitted. Warn so the operator sees the
+        # published credential hint is live (it will be served by
+        # GET /api/auth/demo).
+        if self.is_production and self.enable_demo_user:
+            warnings.warn(
+                "ENABLE_DEMO_USER=true in production: the demo address and "
+                "password are published and will be served by "
+                "GET /api/auth/demo on every deployment.",
+                RuntimeWarning,
+                stacklevel=3,
             )
 
         if self.demo_hydrate_empty_db:

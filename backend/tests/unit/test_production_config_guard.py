@@ -7,10 +7,13 @@ being insecure:
   could read the repository could mint an admin token;
 * an unset ``DATABASE_URL`` fell back to an empty local SQLite file, and the
   DB-free ``/api/health`` probe still reported the service as healthy;
-* the published demo password seeded a working login on every boot.
+* the published demo password could seed a working login on every boot unless
+  the demo account was an explicit opt-in.
 
-Each test pins one refusal. Development behaviour must be unchanged, so the
-tests exercise the validator directly rather than mutating process state.
+Each test pins one refusal (and, where production now allows a deliberate
+opt-in, pins the warning that the operator is asked to accept).
+Development behaviour must be unchanged, so the tests exercise the validator
+directly rather than mutating process state.
 """
 
 import pytest
@@ -156,17 +159,19 @@ def test_demo_hydration_refuses_to_run_in_production(monkeypatch):
 # --- demo account -----------------------------------------------------------
 
 
-def test_production_refuses_the_demo_account_enabled():
-    with pytest.raises(ValueError, match="ENABLE_DEMO_USER"):
-        Settings(**_prod(enable_demo_user=True))
+def test_production_allows_explicit_demo_account_opt_in(recwarn):
+    """SIH26082 ships a demo login, so production may opt back in explicitly.
+
+    The guard moved from "refuse to boot" to "boot, but warn that the
+    published credential hint is live". The default remains off.
+    """
+    settings = Settings(**_prod(enable_demo_user=True))
+    assert settings.demo_user_enabled is True
+    assert any("ENABLE_DEMO_USER=true" in str(w.message) for w in recwarn)
 
 
 def test_demo_user_defaults_off_in_production():
-    """Unset must resolve to "off" in production, so a default boot is safe.
-
-    No error is expected here: the unset default is already the safe one. The
-    validator only fires when someone explicitly opts the account back on.
-    """
+    """Unset must resolve to "off" in production, so a default boot is safe."""
     settings = _prod()
     settings.pop("enable_demo_user")
     assert Settings(**settings).demo_user_enabled is False
@@ -235,11 +240,10 @@ def test_all_problems_are_reported_in_one_error():
             environment="production",
             secret_key=DEV_SECRET_KEY,
             database_url="sqlite:///./x.db",
-            enable_demo_user=True,
             demo_hydrate_empty_db=True,
         )
     message = str(exc.value)
-    for expected in ("SECRET_KEY", "DATABASE_URL", "ENABLE_DEMO_USER", "DEMO_HYDRATE_EMPTY_DB"):
+    for expected in ("SECRET_KEY", "DATABASE_URL", "DEMO_HYDRATE_EMPTY_DB"):
         assert expected in message
 
 

@@ -96,12 +96,16 @@ services:
         sync: false
       - key: DEMO_USER_PASSWORD
         sync: false
-      # The demo account is off in production. Left unset it resolves to off
-      # (see `Settings.demo_user_enabled`), so the published development
-      # password can no longer authenticate against the live deployment --
-      # which it did until the SIH26082 audit found it working.
+      # The SIH26082 demo login. Unset, it still resolves to off in production
+      # (see `Settings.demo_user_enabled`); this deployment explicitly opts the
+      # demo account back on so reviewers can sign in and explore the portal.
+      # The trade-off is accepted deliberately: the demo address and password
+      # are published in this repository and serve the login-page hint via
+      # GET /api/auth/demo, so anyone can authenticate as the analyst role.
+      # A production boot does not refuse the flag, but warns loudly when it is
+      # set.
       - key: ENABLE_DEMO_USER
-        value: "false"
+        value: "true"
       - key: LIVE_REFRESH_ENABLED
         value: "true"
       - key: LIVE_REFRESH_INTERVAL_HOURS

@@ -3,6 +3,20 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.20.0] - 2026-09-29
+
+### Changed
+
+- **`ENABLE_DEMO_USER=true` is now an explicit, allowed opt-in in production.**
+  SIH26082 ships a demo login so reviewers can sign in and explore the portal.
+  Unset still resolves to off in production (and the login-path/credential
+  endpoint refusals are unchanged), but an explicit `true` no longer refuses to
+  boot: the config emits a `RuntimeWarning` instead, noting that the published
+  demo address and password will be served by `GET /api/auth/demo`. The demo
+  hydration fabrication guard (`DEMO_HYDRATE_EMPTY_DB` in production) is
+  unchanged and remains a hard refusal. `render.yaml` now declares
+  `ENABLE_DEMO_USER: "true"`.
+
 ## [1.19.0] - 2026-09-28
 
 ### Added

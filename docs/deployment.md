@@ -110,10 +110,13 @@ drop/recreate the DB first to avoid conflicts.
 - **Production startup is fail-closed.** With `ENVIRONMENT=production` the app
   refuses to boot — rather than starting "healthy" — if `SECRET_KEY` is the
   published dev placeholder or shorter than 32 chars, `DATABASE_URL` is missing
-  or not PostgreSQL, `CORS_ORIGINS` is unset/empty/wildcard, or the demo
-  account / demo hydration are switched on. An unrecognised `ENVIRONMENT`
-  string (e.g. a typo `productionn`) warns on every boot because it silently
-  disables those guards. See `test_production_config_guard.py`.
+  or not PostgreSQL, `CORS_ORIGINS` is unset/empty/wildcard, or demo hydration
+  is switched on. An unrecognised `ENVIRONMENT` string (e.g. a typo
+  `productionn`) warns on every boot because it silently disables those guards.
+  `ENABLE_DEMO_USER=true` is a deliberate, loud opt-in: it boots (with a
+  `RuntimeWarning` that the published demo credential is live via
+  `GET /api/auth/demo`) for the SIH26082 demo deployment, and unset stays off
+  in production. See `test_production_config_guard.py`.
 - **Secrets.** Do not commit `deploy.env`; rotate the development-only Postgres
   password before exposure. Provide `NASA_FIRMS_MAP_KEY` via the env file.
 - **Sizing.** `models/` (200+ model files) and `data/` are mounted read-only, so
