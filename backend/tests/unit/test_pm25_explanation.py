@@ -192,19 +192,31 @@ class TestExplainForecastById:
 
         from app.database import SessionLocal
         base = datetime.now(UTC).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
-        forecast = Forecast(
-            station_id=station.id,
-            forecast_timestamp=base + timedelta(hours=1),
-            horizon_hours=1,
-            pm25_pred=105.3,
-            aqi_pred=200,
-            aqi_category="Very Poor",
-            dominant_pollutant="pm25",
-            pbl_height=180.0,
-        )
         session = SessionLocal()
         try:
-            session.add(forecast)
+            # ``forecasts`` is unique on (station_id, horizon_hours), so the
+            # seeded t+1h row is reused rather than duplicated.
+            forecast = (
+                session.query(Forecast)
+                .filter(
+                    Forecast.station_id == station.id,
+                    Forecast.horizon_hours == 1,
+                )
+                .first()
+            )
+            if forecast is None:
+                forecast = Forecast(
+                    station_id=station.id,
+                    forecast_timestamp=base + timedelta(hours=1),
+                    horizon_hours=1,
+                )
+                session.add(forecast)
+            forecast.forecast_timestamp = base + timedelta(hours=1)
+            forecast.pm25_pred = 105.3
+            forecast.aqi_pred = 200
+            forecast.aqi_category = "Very Poor"
+            forecast.dominant_pollutant = "pm25"
+            forecast.pbl_height = 180.0
             session.commit()
             session.refresh(forecast)
             fid = forecast.id
@@ -276,17 +288,26 @@ class TestForecastExplanationApi:
         with SessionLocal() as db:
             station = db.query(Station).filter(Station.name == "Anand Vihar").first()
             base = datetime.now(UTC).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
-            forecast = Forecast(
-                station_id=station.id,
-                forecast_timestamp=base + timedelta(hours=1),
-                horizon_hours=1,
-                pm25_pred=104.5,
-                aqi_pred=203,
-                aqi_category="Very Poor",
-                dominant_pollutant="pm25",
-                pbl_height=180.0,
+            # Reuse the seeded t+1h row: forecasts are unique on
+            # (station_id, horizon_hours).
+            forecast = (
+                db.query(Forecast)
+                .filter(Forecast.station_id == station.id, Forecast.horizon_hours == 1)
+                .first()
             )
-            db.add(forecast)
+            if forecast is None:
+                forecast = Forecast(
+                    station_id=station.id,
+                    forecast_timestamp=base + timedelta(hours=1),
+                    horizon_hours=1,
+                )
+                db.add(forecast)
+            forecast.forecast_timestamp = base + timedelta(hours=1)
+            forecast.pm25_pred = 104.5
+            forecast.aqi_pred = 203
+            forecast.aqi_category = "Very Poor"
+            forecast.dominant_pollutant = "pm25"
+            forecast.pbl_height = 180.0
             db.commit()
             db.refresh(forecast)
             return forecast.id

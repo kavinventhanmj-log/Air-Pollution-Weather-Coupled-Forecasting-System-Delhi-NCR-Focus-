@@ -348,19 +348,23 @@ def compute_regional_risk(
         ranking.extend(
             [
                 (
-                    W_ATMO * WA_VENT * (1.0 - (ventilation_norm or 0.5)),
+                    # ``is not None`` guards, not ``or``: a genuine normalized
+                    # 0.0 means fully capped ventilation / a fully inverted
+                    # atmosphere, and ``or`` was replacing it with a mid-risk
+                    # 0.5, reporting calm conditions as a neutral atmosphere.
+                    W_ATMO * WA_VENT * (1.0 - (ventilation_norm if ventilation_norm is not None else 0.5)),
                     f"Atmospheric ventilation: coefficient normalized {ventilation_norm:.2f}, its inverse raises accumulation risk"
                     if vent_known
                     else "Atmospheric ventilation unavailable",
                 ),
                 (
-                    W_ATMO * WA_INVERSION * (inversion_norm or 0.0),
+                    W_ATMO * WA_INVERSION * (inversion_norm if inversion_norm is not None else 0.0),
                     f"Stability/inversion: strength normalized {inversion_norm:.2f}; inversions cap vertical mixing"
                     if inv_known
                     else "Stability/inversion unavailable",
                 ),
                 (
-                    W_ATMO * WA_PBL * (1.0 - (pbl_norm or 0.5)),
+                    W_ATMO * WA_PBL * (1.0 - (pbl_norm if pbl_norm is not None else 0.5)),
                     f"Boundary layer: depth normalized {pbl_norm:.2f}; a shallower PBL concentrates surface pollution"
                     if pbl_known
                     else "Boundary layer unavailable",

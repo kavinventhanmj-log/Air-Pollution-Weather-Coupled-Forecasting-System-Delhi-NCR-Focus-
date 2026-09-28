@@ -83,14 +83,41 @@ def _latest_weather(db: Session) -> dict:
             vals["pbl_height"].append(row.pbl_height)
         if row.precipitation is not None:
             vals["precipitation"].append(row.precipitation)
-    if not any(vals["wind_speed"]):
-        return {"wind_speed": 4.0, "wind_direction": 90.0, "pbl_height": 600.0, "precipitation": 0.0}
+    # ``not vals["wind_speed"]`` tests emptiness. The previous ``not any(...)``
+    # treated a genuinely calm network (every reading 0.0 m/s) as no data and
+    # replaced it with a 4.0 m/s wind, which changes the dispersion result.
+    if not vals["wind_speed"]:
+        # No station reported wind: the caller gets explicit ``None`` plus the
+        # availability flags, so the synthetic defaults below are never mistaken
+        # for measurements.
+        return {
+            "wind_speed": 4.0,
+            "wind_direction": 90.0,
+            "pbl_height": 600.0,
+            "precipitation": 0.0,
+            "wind_observed": False,
+            "pbl_observed": False,
+            "synthetic_meteorology": True,
+        }
     import numpy as _np
+
+    def _mean_or(key: str, default: float) -> float:
+        series = vals[key]
+        if not series:
+            return default
+        # Explicit None check: a real mean of 0.0 (calm wind, zero precipitation)
+        # must survive, so the fallback is for missing data only.
+        value = float(_np.mean(series))
+        return default if value != value else value  # NaN check
+
     return {
-        "wind_speed": float(_np.mean(vals["wind_speed"]) or 4.0),
-        "wind_direction": float(_np.mean(vals["wind_direction"]) or 90.0),
-        "pbl_height": float(_np.mean(vals["pbl_height"]) or 600.0),
-        "precipitation": float(sum(vals["precipitation"]) or 0.0),
+        "wind_speed": _mean_or("wind_speed", 4.0),
+        "wind_direction": _mean_or("wind_direction", 90.0),
+        "pbl_height": _mean_or("pbl_height", 600.0),
+        "precipitation": _mean_or("precipitation", 0.0),
+        "wind_observed": True,
+        "pbl_observed": bool(vals["pbl_height"]),
+        "synthetic_meteorology": not vals["pbl_height"],
     }
 
 

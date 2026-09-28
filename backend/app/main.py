@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func
 
 from .api import (
@@ -48,6 +48,8 @@ from .database import (
     seed_data,
     verify_postgres_connection,
 )
+from .services import forecast_service
+from .services import prewarm as prewarm_service
 
 settings = get_settings()
 
@@ -139,8 +141,6 @@ async def lifespan(app: FastAPI):
     # Off the event loop, best-effort, and never blocks readiness.
     prewarm_stop = threading.Event()
     prewarm_task = None
-    from .services import prewarm as prewarm_service
-
     if settings.prewarm_enabled:
         prewarm_service.note_scheduled()
         prewarm_task = asyncio.create_task(asyncio.to_thread(prewarm_service.prewarm_control_room, prewarm_stop))
@@ -184,6 +184,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(forecast_service.InsufficientDataError)
+async def _insufficient_data_handler(_request, exc: forecast_service.InsufficientDataError):
+    """Any service that refuses to invent a value answers with a 503 contract.
+
+    Registered app-wide (rather than per endpoint) so no route can accidentally
+    let an :class:`InsufficientDataError` surface as a 500 or, worse, fall
+    through to a fabricated series.
+    """
+    logger.info("forecast refused: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": exc.to_payload()})
 
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(stations.router, prefix="/api", tags=["Stations"])

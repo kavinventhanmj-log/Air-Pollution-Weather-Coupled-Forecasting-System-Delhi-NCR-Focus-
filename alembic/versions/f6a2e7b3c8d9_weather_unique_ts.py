@@ -26,19 +26,46 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Keep the row with the max id for each (station_id, timestamp) so the
     # unique constraint can be created cleanly.
+    #
+    # The correlated form is used instead of PostgreSQL's ``DELETE ... USING``:
+    # ``USING`` is not valid SQLite, which made ``alembic upgrade head`` fail on
+    # the SQLite development database. The correlation below is equivalent and
+    # runs on both dialects.
     op.execute(
         """
-        DELETE FROM weather_observations a
-        USING weather_observations b
-        WHERE a.id < b.id
-          AND a.station_id = b.station_id
-          AND a.timestamp = b.timestamp
+        DELETE FROM weather_observations
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM weather_observations
+            GROUP BY station_id, timestamp
+        )
         """
     )
-    op.create_unique_constraint(
-        'uq_weather_station_ts', 'weather_observations', ['station_id', 'timestamp']
-    )
+    # SQLite cannot ALTER TABLE to add a constraint and needs a table rebuild.
+    # PostgreSQL must NOT use batch mode here: batch mode drops and recreates the
+    # table, which also drops the id sequence it owns
+    # (weather_observations_id_seq) and breaks every later insert with
+    # "relation does not exist".
+    if op.get_bind().dialect.name == 'sqlite':
+        with op.batch_alter_table(
+            'weather_observations', naming_convention={'uq': 'uq_weather_station_ts'}
+        ) as batch:
+            batch.create_unique_constraint(
+                'uq_weather_station_ts', ['station_id', 'timestamp']
+            )
+    else:
+        op.create_unique_constraint(
+            'uq_weather_station_ts', 'weather_observations', ['station_id', 'timestamp']
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint('uq_weather_station_ts', 'weather_observations', type_='unique')
+    if op.get_bind().dialect.name == 'sqlite':
+        with op.batch_alter_table(
+            'weather_observations', naming_convention={'uq': 'uq_weather_station_ts'}
+        ) as batch:
+            batch.drop_constraint('uq_weather_station_ts', type_='unique')
+    else:
+        op.drop_constraint(
+            'uq_weather_station_ts', 'weather_observations', type_='unique'
+        )

@@ -12,12 +12,19 @@ RUN pip install -r requirements.txt
 
 # application + Alembic migration scripts (migrations run at container start)
 COPY backend/app ./app
+COPY backend/scripts/entrypoint.sh ./entrypoint.sh
+# migrate_safely.py is invoked by entrypoint.sh to decide between
+# `alembic upgrade head` and `alembic stamp head` (legacy databases have tables
+# but no alembic_version). It must be present at backend/scripts/ to match the
+# path entrypoint.sh calls.
+COPY backend/scripts/migrate_safely.py ./backend/scripts/migrate_safely.py
 COPY alembic.ini .
 COPY alembic ./alembic
 
 # run as an unprivileged user
 RUN useradd --create-home --uid 10001 aerocast \
-    && chown -R aerocast:aerocast /app
+    && chown -R aerocast:aerocast /app \
+    && chmod +x /app/entrypoint.sh
 USER aerocast
 
 EXPOSE 8000
@@ -28,4 +35,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The entrypoint applies migrations first, then execs uvicorn. `exec` matters:
+# it makes uvicorn PID 1 so Docker signals reach it directly instead of being
+# swallowed by a shell wrapper.
+ENTRYPOINT ["/app/entrypoint.sh"]

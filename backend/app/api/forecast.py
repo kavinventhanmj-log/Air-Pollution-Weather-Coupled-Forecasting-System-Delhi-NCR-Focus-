@@ -21,18 +21,84 @@ logger = logging.getLogger("aerocast.forecast")
 
 router = APIRouter()
 
+def _station_or_404(db: Session, station_name: str) -> Station:
+    station = db.query(Station).filter(Station.name == station_name).first()
+    if not station:
+        raise HTTPException(status_code=404, detail=f"Station '{station_name}' not found")
+    return station
+
+def _insufficient(exc: forecast_service.InsufficientDataError) -> HTTPException:
+    """Map a refused forecast onto an honest, machine-readable 503.
+
+    ``detail.code == "insufficient_data"`` is what the frontend switches on to
+    render "Data unavailable" instead of a generic failure, and it is the reason
+    no forecast row is ever persisted for a request that could not be modelled.
+    """
+    return HTTPException(status_code=503, detail=exc.to_payload())
+
+
+def record_forecast_run(
+    db: Session,
+    *,
+    station_id: int,
+    station_name: str,
+    status: str,
+    horizons: list[int] | None = None,
+    provenance: dict | None = None,
+    refusal: forecast_service.InsufficientDataError | None = None,
+) -> None:
+    """Write one ``forecast_runs`` audit row for this generation attempt.
+
+    Recorded for successes, fallbacks AND refusals, so a published number can
+    always be traced back to the data window and model behind it - and so a
+    refusal is visible evidence that the system declined rather than silent.
+
+    Never raises: the audit trail must not be able to fail a request that has
+    otherwise succeeded.
+    """
+    from ..models.db_models import ForecastRun
+
+    payload = dict(provenance or {})
+    try:
+        run = ForecastRun(
+            station_id=station_id,
+            station_name=station_name,
+            status=status,
+            refusal_code=getattr(refusal, "code", None) or "insufficient_data"
+            if refusal is not None
+            else None,
+            refusal_reason=getattr(refusal, "reason", None) if refusal is not None else None,
+            model=payload.get("model"),
+            model_artifact=payload.get("model_artifact"),
+            model_artifact_sha256=payload.get("model_artifact_sha256"),
+            fallback_used=bool(payload.get("fallback_used")),
+            fallback_reason=payload.get("fallback_reason"),
+            horizons=",".join(str(h) for h in (horizons or [])) or None,
+            history_rows=int(payload.get("history_rows") or 0),
+            pollution_rows=int(payload.get("pollution_rows") or 0),
+            weather_rows=int(payload.get("weather_rows") or 0),
+            fire_rows=int(payload.get("fire_rows") or 0),
+            window_start=payload.get("window_start"),
+            window_end=payload.get("window_end"),
+            latest_observation=payload.get("latest_observation"),
+            observation_age_hours=payload.get("observation_age_hours"),
+            is_stale=bool(payload.get("is_stale")),
+            is_demo=bool(payload.get("is_demo")),
+            is_re_stamped=bool(payload.get("is_re_stamped")),
+            data_source=payload.get("data_source"),
+        )
+        db.add(run)
+        db.commit()
+    except Exception:
+        logger.warning("could not write forecast_runs audit row for %s", station_name, exc_info=True)
+        db.rollback()
+
 def _round_hour(dt: datetime) -> datetime:
     if dt is None:
         return None
     if dt.tzinfo is not None:
         dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt.replace(minute=0, second=0, microsecond=0)
-
-def _station_or_404(db: Session, station_name: str) -> Station:
-    station = db.query(Station).filter(Station.name == station_name).first()
-    if not station:
-        raise HTTPException(status_code=404, detail=f"Station '{station_name}' not found")
-    return station
 
 def _to_forecast_point(f) -> ForecastPoint:
     return ForecastPoint(
@@ -77,10 +143,39 @@ def generate_coupled_forecast(
             raise HTTPException(status_code=503, detail="No stations available; seed the database first")
 
     horizons = list(dict.fromkeys(req.horizons))
-    result = forecast_service.generate_coupled_forecast(db, station.id, horizons)
+    try:
+        features, coverage = forecast_service.build_features_from_db_with_meta(db, station.id)
+        result = forecast_service.generate_coupled_forecast(db, station.id, horizons)
+    except forecast_service.InsufficientDataError as exc:
+        # Refuse before anything is persisted: a forecast that cannot be modelled
+        # must never leave a row behind for a later reader to mistake for real.
+        record_forecast_run(
+            db,
+            station_id=station.id,
+            station_name=station.name,
+            status="refused",
+            refusal=exc,
+            horizons=horizons,
+        )
+        raise _insufficient(exc) from exc
     rows = forecast_service.save_coupled_forecasts(db, station.id, result["coupled"])
 
-    coverage = forecast_service.station_data_sufficiency(db, station.id)
+    provenance = forecast_service.build_provenance(
+        db,
+        station_id=station.id,
+        station_name=station.name,
+        coverage=coverage,
+        horizons=horizons,
+        model_label="coupled-two-way",
+    )
+    record_forecast_run(
+        db,
+        station_id=station.id,
+        station_name=station.name,
+        status="succeeded",
+        horizons=horizons,
+        provenance=provenance,
+    )
 
     return {
         "station": station.name,
@@ -94,6 +189,7 @@ def generate_coupled_forecast(
         "pooled_features": bool(coverage["pooled"]),
         "local_readings": int(coverage["local_readings"]),
         "history_days": coverage.get("history_days"),
+        "provenance": provenance,
     }
 
 @router.post("/forecast/generate", response_model=ForecastGenerateResponse)
@@ -115,19 +211,65 @@ def generate_forecast(
             raise HTTPException(status_code=503, detail="No stations available; seed the database first")
 
     horizons = list(dict.fromkeys(req.horizons))
-    coverage = forecast_service.station_data_sufficiency(db, station.id)
 
     # Operational outlook: run the time-stepped two-way coupled forecast so the
     # served 72h AQI reflects aerosol-radiative PBL/weather feedback (the core
     # requirement). Falls back to the direct per-horizon ML forecast if the
     # coupled engine cannot run for any reason.
+    #
+    # InsufficientDataError is re-raised, never swallowed: it means the station
+    # has no real history, and the direct-ML path would hit the identical wall.
+    # Letting it fall into the generic handler would still refuse, but would log
+    # a misleading "coupled forecast failed" warning for a data-availability
+    # condition and risk a second code path reaching persistence.
+    try:
+        coverage = forecast_service.station_data_sufficiency(db, station.id)
+    except forecast_service.InsufficientDataError as exc:
+        raise _insufficient(exc) from exc
+
+    fallback_reason = None
     try:
         result = forecast_service.generate_coupled_forecast(db, station.id, horizons)
         predictions = result["coupled"]
-        forecast_service.save_coupled_forecasts(db, station.id, predictions)
-    except Exception:
+        model_label = "coupled-two-way"
+    except forecast_service.InsufficientDataError as exc:
+        record_forecast_run(
+            db,
+            station_id=station.id,
+            station_name=station.name,
+            status="refused",
+            refusal=exc,
+            horizons=horizons,
+        )
+        raise _insufficient(exc) from exc
+    except Exception as exc:
+        # Persistence deliberately happens OUTSIDE this try. Saving inside it
+        # made a database failure indistinguishable from an engine failure, so
+        # the broad catch would then re-run generation on the direct-ML path and
+        # persist a second, different set of rows while demoting the real cause
+        # to ``fallback_reason``.
         logger.warning("coupled forecast failed for %s; falling back to direct ML", station.name, exc_info=True)
-        _, predictions = forecast_service.generate_forecast(db, station.id, horizons)
+        try:
+            _, predictions = forecast_service.generate_forecast(db, station.id, horizons)
+        except forecast_service.InsufficientDataError as insufficient:
+            record_forecast_run(
+                db,
+                station_id=station.id,
+                station_name=station.name,
+                status="refused",
+                refusal=insufficient,
+                horizons=horizons,
+            )
+            raise _insufficient(insufficient) from insufficient
+        model_label = "direct-ml"
+        fallback_reason = f"{type(exc).__name__}: {exc}"
+
+    # The coupled path does not persist on its own, so it is saved here - after
+    # generation succeeded and outside every try/except. A storage failure then
+    # surfaces as a 5xx instead of silently switching models or writing a second
+    # set of rows. generate_forecast() persists its own rows internally.
+    if model_label == "coupled-two-way":
+        forecast_service.save_coupled_forecasts(db, station.id, predictions)
 
     weather = forecast_service.get_weather_context(db, station.id)
     fire = forecast_service.get_fire_context(db)
@@ -156,6 +298,24 @@ def generate_forecast(
         ))
     db.commit()
 
+    provenance = forecast_service.build_provenance(
+        db,
+        station_id=station.id,
+        station_name=station.name,
+        coverage=coverage,
+        horizons=horizons,
+        model_label=model_label,
+        fallback_reason=fallback_reason,
+    )
+    record_forecast_run(
+        db,
+        station_id=station.id,
+        station_name=station.name,
+        status="fallback" if fallback_reason else "succeeded",
+        horizons=horizons,
+        provenance=provenance,
+    )
+
     return ForecastGenerateResponse(
         station=station.name,
         generated_at=datetime.now(UTC).replace(tzinfo=None),
@@ -163,6 +323,7 @@ def generate_forecast(
         pooled_features=bool(coverage["pooled"]),
         local_readings=int(coverage["local_readings"]),
         history_days=coverage.get("history_days"),
+        provenance=provenance,
         forecasts=[
             ForecastPoint(
                 timestamp=datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=p["horizon_hours"]),

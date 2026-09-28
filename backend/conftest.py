@@ -91,6 +91,9 @@ def _seed_test_data(session):
         FireReading(latitude=29.5, longitude=76.0, acq_date=fire_ts, confidence="high", frp=65.0, satellite="SNPP", daynight="D"),
     ])
 
+    # Distinct horizon_hours per row: ``forecasts`` is unique on
+    # (station_id, horizon_hours) so a regeneration replaces the horizon
+    # instead of appending a duplicate.
     forecasts = []
     for i in range(12):
         ts = base - timedelta(hours=i)
@@ -100,7 +103,7 @@ def _seed_test_data(session):
         no2 = round(85 + 3 * i, 1)
         aqi = _calculate_current_aqi(pm25, pm10, o3, no2, 16.0, 2.5)
         forecasts.append(Forecast(
-            station_id=station.id, forecast_timestamp=ts, horizon_hours=1,
+            station_id=station.id, forecast_timestamp=ts, horizon_hours=i + 1,
             pm25_pred=pm25, pm10_pred=pm10, o3_pred=o3, no2_pred=no2,
             aqi_pred=aqi, aqi_category="Moderate", dominant_pollutant="pm25",
             inversion_detected=1, inversion_strength=0.64, pbl_height=180.0,

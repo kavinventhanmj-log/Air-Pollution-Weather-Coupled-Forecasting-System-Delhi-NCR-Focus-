@@ -20,10 +20,18 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ensure the backend package is importable so the metadata below resolves
+# Ensure the backend package is importable so the metadata below resolves.
+# The backend root must come BEFORE any other entry that exposes a package
+# named ``app``: the repository root holds a tiny ``app/`` shim for Render's
+# stock ``uvicorn app.main:app`` command, and that shim has no ``database``
+# submodule. A plain "if not in sys.path" guard was not enough - when
+# PYTHONPATH already listed the backend root, the guard skipped the insert and
+# the shim won, so ``alembic upgrade head`` failed with
+# "No module named 'app.database'" only when PYTHONPATH was set.
 _backend_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
-if _backend_root not in sys.path:
-    sys.path.insert(0, _backend_root)
+while _backend_root in sys.path:
+    sys.path.remove(_backend_root)
+sys.path.insert(0, _backend_root)
 
 if config.attributes.get("configure_logger", True):
     pass

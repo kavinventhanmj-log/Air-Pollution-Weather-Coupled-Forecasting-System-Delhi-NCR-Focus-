@@ -7,12 +7,12 @@
 ---
 
 [![CI](https://github.com/methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-/actions/workflows/ci.yml/badge.svg)](https://github.com/methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-635%20passed-green)](backend/tests)
+[![Tests](https://img.shields.io/badge/tests-941%20passed-success)](backend/tests)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![Frontend](https://img.shields.io/badge/live%20dashboard-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forec-eight.vercel.app)
-[![Backend](https://img.shields.io/badge/live%20API-Render%20%E2%9C%93-success?logo=render)](https://air-pollution-weather-coupled.onrender.com/health)
+[![Frontend](https://img.shields.io/badge/frontend-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forec-eight.vercel.app)
+[![Backend](https://img.shields.io/badge/backend-status%3A%20unverified-lightgrey?logo=render)](docs/deployment.md)
 
 AeroCast-NCR fuses **official CPCB real-time monitoring (data.gov.in)**,
 **Open-Meteo weather**, **NASA FIRMS active fires**, **ERA5 meteorology**,
@@ -24,12 +24,20 @@ core** that simulates how stubble-burning plumes disperse under prevailing
 weather. Every result is explainable (SHAP), bounded (split-conformal
 prediction intervals) and honest (gated real engines, openly-reported skill).
 
-> **Live demo** — the system is deployed and running:
+> ### Deployment status (verified 2026-09-28)
 >
-> - **Frontend (dashboard):** <https://air-pollution-weather-coupled-forec-eight.vercel.app>
-> - **Backend (API / Swagger):** <https://air-pollution-weather-coupled.onrender.com/docs>
-> - **Health check:** <https://air-pollution-weather-coupled.onrender.com/health>
-> - **Demo login:** `analyst@aerocast.in` / `AeroCast@2026`
+> The **frontend** is live and serving: <https://air-pollution-weather-coupled-forec-eight.vercel.app>
+>
+> The **backend** at `air-pollution-weather-coupled.onrender.com` was **not
+> responding** at the time of writing (both `/health` and `/api/health` timed
+> out; the Vercel `/api/*` proxy times out as a consequence). Treat the hosted
+> API as unverified — run the stack locally with the Quick Start below, or follow
+> [`docs/deployment.md`](docs/deployment.md) to bring the backend up and verify
+> it yourself before relying on any hosted number.
+>
+> The database credentials previously committed to local environment files have
+> been treated as compromised and should be **rotated**; this repository ships
+> only `.env.example` templates, and `.env` / `*.db` are git-ignored.
 
 ---
 
@@ -37,11 +45,13 @@ prediction intervals) and honest (gated real engines, openly-reported skill).
 
 - [Why AeroCast-NCR](#why-aerocast-ncr)
 - [Key Capabilities](#key-capabilities)
+- [Refusal Over Fabrication](#refusal-over-fabrication)
 - [Architecture](#architecture)
 - [Technology Stack](#technology-stack)
 - [Data Sources & Honesty Gates](#data-sources--honesty-gates)
 - [Model Performance](#model-performance)
 - [Data & Machine-Learning Pipeline](#data--machine-learning-pipeline)
+- [Database & Migrations](#database--migrations)
 - [Repository Layout](#repository-layout)
 - [Quick Start — Docker](#quick-start--docker)
 - [Quick Start — Bare Metal](#quick-start--bare-metal)
@@ -52,6 +62,7 @@ prediction intervals) and honest (gated real engines, openly-reported skill).
 - [Documentation](#documentation)
 - [Roadmap](#roadmap)
 - [Honest Scope](#honest-scope)
+- [Known Issues](#known-issues)
 - [Contributing & Security](#contributing--security)
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
@@ -126,6 +137,44 @@ See [`docs/ps_mapping.md`](docs/ps_mapping.md) for the requirement-by-requiremen
 mapping to the official problem statement, and
 [`docs/SIH_FINAL_COMPLIANCE.md`](docs/SIH_FINAL_COMPLIANCE.md) /
 [`docs/SIH_GAP_AUDIT.md`](docs/SIH_GAP_AUDIT.md) for evidence and audit.
+
+## Refusal Over Fabrication
+
+The single most important design decision in this system: **when the data cannot
+support a forecast, the API refuses instead of producing a plausible-looking
+number.** A dashboard that invents clean PM2.5 curves from a sensor that has not
+reported for three weeks is worse than no dashboard at all — it is actively
+misleading during exactly the episodes where a wrong call costs the most.
+
+| Guard | Behaviour | Where |
+|--------|-----------|-------|
+| **Minimum history** | Fewer than `MIN_FEATURE_ROWS` (2) aligned observation rows ⇒ `503 insufficient_data`. No rows ⇒ no response body with numbers. | `forecast_service.py` |
+| **Staleness** | Newest observation older than `STALE_AFTER_HOURS` (6 h) ⇒ refused, with `is_stale: true` in provenance. | `forecast_service.py` |
+| **Missing values stay missing** | `None`/`NaN` propagate as `None`; they are never coerced to `0.0`. Fallbacks are explicit, labelled, and reported in provenance. | `_feature()`, `_upsert_forecasts()` |
+| **No borrowed provenance** | A station's provenance is built from *that station's* rows. An empty station reports empty provenance rather than inheriting a neighbour's timestamp. | `build_provenance()` |
+| **Re-stamp transparency** | Rows copied forward by the demo bootstrap carry `re_stamped = true`; forecasts built on them are flagged, never presented as live sensor data. | `re_stamped` column, `bootstrap_recent.py` |
+| **Audit trail** | Every generation attempt — succeeded, fallback, or refused — is written to `forecast_runs` with the model, artifact SHA-256, row counts, window, and provenance flags. A published number can always be traced to the data behind it. | `ForecastRun`, `record_forecast_run()` |
+| **Real zero ≠ missing** | A genuine `0.0` reading (calm wind, no fire) is preserved, not treated as "no data". | `transport_risk_service.py`, `dispersion_service.py` |
+| **Gated engines stay gated** | HYSPLIT / WRF-Chem / IMD / ERA5 report a `reason` when credentials or binaries are absent. They never simulate a result and label it real. | `docs/hysplit.md`, `docs/imd.md` |
+
+Refusals return a machine-readable payload so the UI can distinguish "no data
+yet" from "backend is broken":
+
+```json
+{
+  "detail": {
+    "code": "insufficient_data",
+    "message": "Anand Vihar has 0 aligned observation rows; 2 are required.",
+    "station": "Anand Vihar",
+    "required_hours": 2,
+    "available_hours": 0
+  }
+}
+```
+
+Because a refusal is a legitimate outcome, it is *recorded*, not swallowed — see
+`forecast_runs` above. Query it with `GET /api/forecast/{station}` provenance or
+directly in SQL to answer "why was there no forecast on Tuesday?".
 
 ## Architecture
 
@@ -269,6 +318,67 @@ single observations, and upserts them idempotently. Without a key the ingest
 endpoint returns `400` (`DATA_GOV_API_KEY is not set`) rather than inventing
 data.
 
+## Database & Migrations
+
+Schema is versioned with **Alembic** and is the single source of truth for both
+PostgreSQL (production) and SQLite (development). Migrations run automatically:
+
+- **Render** — `preDeployCommand: python backend/scripts/migrate_safely.py` in
+  [`render.yaml`](render.yaml), so a release never serves traffic against a stale
+  schema.
+- **Docker** — [`backend/scripts/entrypoint.sh`](backend/scripts/entrypoint.sh)
+  migrates, then `exec`s uvicorn (keeping it PID 1 so Docker signals reach it).
+  Set `SKIP_MIGRATIONS=1` to bypass. The entrypoint **refuses to start** if
+  migrations fail, rather than serving confusing 500s.
+- **Local** — `python -m alembic upgrade head`, or let
+  `backend/app/database.py::apply_migrations()` reconcile a SQLite dev database.
+
+Current head: **`b8d3f1a9c4e2`** — station foreign keys, forecast uniqueness, the
+`forecast_runs` audit table, and `pollution_observations.re_stamped`.
+
+**`migrate_safely.py`, not a bare `alembic upgrade head`.** Deploy targets run
+`migrate_safely.py`, which inspects the database and branches three ways:
+
+| Detected state | How | Action |
+|----------------|-----|--------|
+| `alembic_version` present | `versioned` | `alembic upgrade head` |
+| Tables exist, no `alembic_version` | `unversioned` | `alembic stamp head` |
+| No application tables | `empty` | `alembic upgrade head` |
+
+The `unversioned` branch is the one that matters, and the reason a bare upgrade
+is unsafe to ship. A pre-existing database that has the tables but no version
+mark would have the **whole chain replayed against itself** — every
+`CREATE TABLE` fails against a table that already exists, and because the
+failure is non-idempotent the next deploy fails identically. Stamping is correct
+there because those tables were built by `create_all()` from the same ORM
+metadata the chain is generated from, so they are already at head. Blindly
+stamping is *also* wrong, though, so the script refuses when a legacy database
+is missing tables added by recent migrations (e.g. `forecast_runs`) — claiming
+head there would hide a real gap until runtime. Use `--status` to inspect
+without writing, and `--force-upgrade` to replay deliberately.
+
+**Cross-dialect correctness.** The chain is verified in both directions against a
+throwaway PostgreSQL 16 *and* SQLite: `upgrade head` → `downgrade base` →
+`upgrade head`, followed by `alembic revision --autogenerate` confirming **zero
+drift** against the ORM metadata on both engines. Three portability rules are
+load-bearing and easy to regress:
+
+1. **No `DELETE ... USING`** (PostgreSQL-only) — dedup uses the correlated
+   `WHERE id NOT IN (SELECT MAX(id) … GROUP BY …)` form, valid on both engines.
+2. **No `ALTER SEQUENCE` / `RENAME CONSTRAINT` on SQLite** — those are guarded by
+   a dialect check; SQLite has no named sequences.
+3. **Batch mode is SQLite-only.** Alembic's `batch_alter_table` rebuilds the
+   table on PostgreSQL, which **drops the id sequence the table owns** and
+   replaces it with `_alembic_tmp_<table>_id_seq` — silently orphaning every
+   later `INSERT`. PostgreSQL uses plain `ALTER TABLE … ADD CONSTRAINT`.
+
+> A historical note worth keeping: because the baseline originally created `id`
+> as a bare `Integer` (no `SERIAL`) and `main.py` *swallowed* migration
+> exceptions, the production schema was actually being built by
+> `Base.metadata.create_all()` with **no `alembic_version` table at all**. The
+> baseline now declares `autoincrement=True` so the chain and `create_all` agree,
+> and `migrate_safely.py` handles databases left in that state.
+
 ## Repository Layout
 
 ```
@@ -279,8 +389,9 @@ aerocast-ncr/
 │   │   ├── services/          #   domain logic (refresh, events, coupling, dispersion…)
 │   │   ├── models/            #   SQLAlchemy models (db_models.py)
 │   │   ├── schemas/           #   Pydantic v2 request/response schemas
-│   │   ├── main.py            #   app factory + health
+│   │   ├── main.py            #   app factory + lifespan (migrations → schema → seed)
 │   │   └── database.py        #   engine/session + SQLite apply_migrations
+│   ├── scripts/               #   bootstrap_recent.py · migrate_safely.py · audit_re_stamps.py · entrypoint.sh · …
 │   └── tests/                 # unit + integration pytest suites
 ├── ml/
 │   ├── features/              # coupling, coupled_loop, dispersion_solver, grid, …
@@ -291,17 +402,27 @@ aerocast-ncr/
 │   ├── ctm/                   # HYSPLIT & WRF-Chem real-engine adapters
 │   └── evaluation/            # metrics
 ├── frontend/src/              # React + TS SPA (pages/, components/, hooks/, auth/)
-├── alembic/versions/          # versioned schema migrations
+├── alembic/versions/          # versioned schema migrations (head: b8d3f1a9c4e2)
 ├── data/                      # processed datasets (gitignored large exports)
 ├── models/                    # trained artifacts (joblib / JSON model cards)
 ├── docs/                      # methodology, API, events, scenarios, deploy, ERA5, IMD, HYSPLIT…
 ├── scripts/                   # CLI tools (download*, build_dataset, refresh, fetch_*)
 ├── tests/                     # top-level integration tests
+├── app/main.py                # Render shim: `uvicorn app.main:app` from repo root
 ├── .github/workflows/         # CI (ruff · pytest · Alembic-on-Postgres · tsc/vite)
+├── render.yaml                # Render blueprint (pre-deploy migrations)
 ├── docker-compose.yml         # full-stack compose (db · backend · frontend)
 ├── Makefile                   # developer command centre
 └── pyproject.toml             # packaging + ruff/pytest/cov config
 ```
+
+> The root-level `app/main.py` is a one-line shim that re-exports
+> `backend.app.main:app`, so Render's stock `uvicorn app.main:app` start command
+> works from the repository root. `render.yaml` and the Docker image use the
+> explicit `backend.app.main:app` / `app.main:app` paths instead and do not
+> depend on it. Note that this shim *shadows* `backend/app` if `backend/` is not
+> first on `sys.path` — which is why `alembic/env.py` enforces that ordering
+> explicitly.
 
 ## Quick Start — Docker
 
@@ -315,20 +436,28 @@ cp docs/deploy.env.example deploy.env   # (optional) production overrides
 # 2. Build and start the full stack (Postgres + API + frontend)
 docker compose up -d --build
 
-# 3. Boot applies Alembic migrations automatically; seeding + live refresh run in-app
+# 3. The entrypoint applies `alembic upgrade head` before serving;
+#    station seeding and the live-refresh scheduler then run in-app.
 
 # 4. Access
 #    Frontend : http://localhost:5173
 #    API docs  : http://localhost:8000/docs
-#    Health    : http://localhost:8000/health
+#    Liveness  : http://localhost:8000/api/health
+#    Readiness : http://localhost:8000/health   (round-trips the database)
 ```
+
+`/api/health` is a **liveness** probe and answers as soon as the process accepts
+connections. `/health` is a **readiness** probe that round-trips Postgres, so it
+is the right target for a human but the wrong target for a container or platform
+health check — a cold or pooled database will exceed the timeout and trigger a
+restart loop. `docker-compose.yml`, the `Dockerfile` `HEALTHCHECK`, and
+`render.yaml` all deliberately point at `/api/health`.
 
 Stop with `docker compose down` (add `-v` to also drop the `pgdata` volume).
 
 ## Quick Start — Bare Metal
 
 ```bash
-# Backend
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 cp .env.example .env
@@ -345,13 +474,21 @@ development against SQLite, `backend/app/database.py` `apply_migrations()`
 keeps the schema in sync with the Alembic chain (including the
 `uq_weather_station_ts` unique index).
 
+> **Cloning is slow by design.** `models/` (~1.26 GB) and `data/` are committed
+> so a fresh clone is immediately runnable — model artifacts are joblib
+> binaries that a Docker build cannot regenerate. If clone time becomes a
+> problem, narrow it with `git clone --filter=blob:none` plus a sparse checkout
+> of `backend/`, `frontend/`, `ml/`, and `docs/`, then fetch `models/` on demand.
+> The ~194 MB SQLite database (`aerocast_ncr.db`) is git-ignored and must be
+> built locally.
+
 ## API Summary
 
 All endpoints live under `/api` (interactive docs at `/docs`):
 
 | Area | Endpoints |
 |------|-----------|
-| Auth & system | `POST /api/auth/login`, `POST /api/auth/demo`, `GET /api/auth/me`, `GET /api/system`, `GET /health` |
+| Auth & system | `POST /api/auth/login`, `POST /api/auth/demo`, `GET /api/auth/me`, `GET /api/system`, `GET /api/health` (liveness), `GET /health` (readiness) |
 | Station & current AQI | `GET /stations`, `GET /stations/{station}`, `GET /current/{station}` |
 | Official CPCB pollution | `POST /pollution/ingest`, `GET /pollution/latest`, `GET /pollution/stations`, `GET /pollution/{station_id}/history` |
 | Forecast | `POST /forecast/generate`, `GET /forecast/{station}`, `GET /forecast/ncr`, `GET /forecast/comparison/{station}`, `POST /forecast/coupled` |
@@ -365,7 +502,7 @@ All endpoints live under `/api` (interactive docs at `/docs`):
 | GRAP (CAQM) | `GET /grap/stages`, `GET /grap/current`, `GET /grap/{station}` |
 | Explainability | `GET /explanation/{station}` |
 | Alerts & metrics | `GET /alerts`, `GET /model/performance`, `GET / POST /model/metrics` |
-| Summary & export | `GET /summary`, `GET /export/forecast.csv`, `GET /health` |
+| Summary & export | `GET /summary`, `GET /export/forecast.csv` |
 
 Request/response schemas are described in [`docs/api.md`](docs/api.md) and are
 introspectable at `/docs`.
@@ -393,21 +530,27 @@ introspectable at `/docs`.
 ## Testing & Quality Gates
 
 ```bash
-python -m pytest backend/tests -q            # 635 unit + integration tests
-python -m ruff check backend/app backend/tests   # lint (CI-scoped)
-cd frontend && npm run build                 # tsc type-check + production build
+python -m pytest backend/tests -q                   # 960 unit + integration tests
+python -m ruff check backend/app backend/tests       # lint (CI-scoped)
+cd frontend && npm run build                         # tsc type-check + production build
 ```
+
+The suite covers the refusal contract explicitly — `test_forecast_data_sufficiency.py`
+asserts that under-powered or stale stations return `503 insufficient_data`, that
+genuine `0.0` values are preserved, and that provenance never leaks across
+stations. Forecast regeneration is tested for idempotency against the
+`(station_id, horizon_hours)` unique constraint.
 
 Convenience targets: `make test`, `make test-unit`, `make test-integration`,
 `make build`, `make refresh-data`, `make pip-audit` — see the `Makefile`.
 
 CI additionally verifies **`alembic upgrade head` against a fresh PostgreSQL
-16** and re-runs the integration/API suite against it, so schema migrations
-are proven on every push — not just on the developer's laptop.
+16** and re-runs the integration/API suite against it, so schema migrations are
+proven on every push — not just on the developer's laptop.
 
 ## Deployment & CI/CD
 
-### Vercel + Render (managed cloud) — *live today*
+### Vercel + Render (managed cloud)
 
 Production is split across two platforms — see
 [`render.yaml`](render.yaml) and [`frontend/vercel.json`](frontend/vercel.json):
@@ -415,13 +558,20 @@ Production is split across two platforms — see
 | App | Host | How |
 |-----|------|-----|
 | **Frontend** (React SPA) | **Vercel** | Import the repo, root dir = `frontend`, framework preset *Vite*, build `npm run build`, output dir `dist`. `vercel.json` rewrites `/api/*` → the Render backend URL and falls back to `index.html` for SPA routes. |
-| **Backend** (FastAPI) | **Render Web Service** | Blueprint `render.yaml` → build `pip install -r backend/requirements.txt`, start `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT` (repo-root cwd so `ml/`, `models/`, `data/`, `alembic.ini` resolve), health check `/health`. |
+| **Backend** (FastAPI) | **Render Web Service** | Blueprint `render.yaml` → build `pip install -r backend/requirements.txt`, **pre-deploy `python backend/scripts/migrate_safely.py`**, start `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT` (repo-root cwd so `ml/`, `models/`, `data/`, `alembic.ini` resolve), health check `/api/health`. |
 | **Database** | **Neon / Supabase** | External Postgres. Set `DATABASE_URL` on Render (overriding it disables the SQLite default and triggers migrations + seeding at boot). |
 
 Mandatory env vars on Render: `DATABASE_URL`, `CORS_ORIGINS`
 (`https://<your-app>.vercel.app`), `SECRET_KEY` (long random). Optional:
 `NASA_FIRMS_MAP_KEY`, `DATA_GOV_API_KEY`, `IMD_API_KEY`,
 `LIVE_REFRESH_ENABLED=true`, `DEMO_USER_PASSWORD`.
+
+> **Before your first deploy to an existing database:** if it was created by an
+> older build of this app, it may have **no `alembic_version` table** (see
+> [Database & Migrations](#database--migrations)). Nothing to do by hand —
+> `preDeployCommand` runs `migrate_safely.py`, which detects that state and
+> stamps instead of replaying. To check ahead of a deploy without writing:
+> `python backend/scripts/migrate_safely.py --status`.
 
 > Free-tier caveats: Render free Postgres expires after 90 days, and the free
 > web service idles after ~15 min (cold start = migrations + model load, a few
@@ -435,7 +585,7 @@ Mandatory env vars on Render: `DATABASE_URL`, `CORS_ORIGINS`
   first-boot checks).
 - **Production env template** — [`docs/deploy.env.example`](docs/deploy.env.example).
 - **CI** — `.github/workflows/ci.yml`:
-  1. *Backend:* ruff + full pytest suite (`748 passed`).
+  1. *Backend:* ruff + full pytest suite (`960 passed`).
   2. *Migrations:* `alembic upgrade head` against a fresh Postgres 16,
      then integration/API tests against it.
   3. *Frontend:* `tsc` + `vite build`.
@@ -520,6 +670,36 @@ cannot produce.**
   system reports `reason` strings when gated and never fabricates data. Exact
   formulas, constants and units for every indicator are in
   [`docs/SCIENTIFIC_METHODOLOGY.md`](docs/SCIENTIFIC_METHODOLOGY.md).
+
+### Known issues
+
+Stated plainly rather than buried — each is a real limitation of the current
+tree, not a roadmap item.
+
+- **The flat `xgboost_pm25_*` artifacts are stale relative to the serving
+  feature contract.** They declare 114 feature names; the current feature
+  builder supplies 107, missing `latitude`, `longitude`, `mean_frp`,
+  `max_bright`, and three season dummies. The `/api/explanation/{station}`
+  endpoint was repointed to the matched `models/pm25` family and is no longer
+  affected, but the **direct forecast path still loads the flat artifacts**, and
+  `_model_predict()` can substitute `0.0` for a feature the builder did not
+  produce. The correct fix is to retrain the flat model on the current contract
+  (or retire it in favour of the per-horizon family) — not to keep the
+  substitution. Until then, treat `mean_frp` / `max_bright` / season-dummy
+  contributions in a served PM2.5 explanation as unvalidated.
+- **`re_stamped` is not backfilled for historical rows.** The migration
+  deliberately leaves pre-existing rows at `false` rather than guessing: a
+  pm25-only heuristic measured 87% false positives against the real database,
+  and a full-value-tuple heuristic mostly matched all-`NULL`/`aqi=0` rows. Legacy
+  re-stamps are therefore indistinguishable from real measurements *after the
+  fact*. New rows are stamped correctly by `bootstrap_recent.py`; use the
+  read-only `backend/scripts/audit_re_stamps.py` to review candidates manually.
+  Legacy rows remain covered by the 6-hour staleness refusal.
+- **Empty-state GET endpoints are not uniformly explicit.** `/api/forecast/{station}`,
+  `/api/summary`, `/api/grid/*`, and `/api/pollution/*` do not all yet return a
+  dedicated empty/provenance payload the way the forecast-generation paths do.
+- **The hosted backend is unverified** — see
+  [Deployment status](#deployment-status-verified-2026-09-28) above.
 
 ## Contributing & Security
 

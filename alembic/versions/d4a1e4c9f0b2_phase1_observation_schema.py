@@ -26,6 +26,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    is_sqlite = op.get_bind().dialect.name == 'sqlite'
+
     # Rename the two observation tables to the Phase-1 names. Postgres carries
     # each table's indexes and the uq_pollution_station_ts unique constraint
     # over to the new name automatically.
@@ -39,36 +41,65 @@ def upgrade() -> None:
     op.create_index(op.f('ix_pollution_observations_id'), 'pollution_observations', ['id'], unique=False)
     op.create_index(op.f('ix_weather_observations_id'), 'weather_observations', ['id'], unique=False)
 
-    # Rename the PK constraints (and their backing indexes) to match.
-    op.execute('ALTER TABLE pollution_observations RENAME CONSTRAINT pollution_readings_pkey TO pollution_observations_pkey')
-    op.execute('ALTER TABLE weather_observations RENAME CONSTRAINT weather_readings_pkey TO weather_observations_pkey')
-
-    # Rename the id sequences; Postgres rewrites the column defaults to match.
-    op.execute('ALTER SEQUENCE pollution_readings_id_seq RENAME TO pollution_observations_id_seq')
-    op.execute('ALTER SEQUENCE weather_readings_id_seq RENAME TO weather_observations_id_seq')
+    # Rename the PK constraints (and their backing indexes) to match, and the id
+    # sequences (Postgres rewrites the column defaults to match). None of these
+    # statements exist in SQLite, where the PK/sequence names are implicit, so
+    # they are Postgres-only.
+    if not is_sqlite:
+        op.execute('ALTER TABLE pollution_observations RENAME CONSTRAINT pollution_readings_pkey TO pollution_observations_pkey')
+        op.execute('ALTER TABLE weather_observations RENAME CONSTRAINT weather_readings_pkey TO weather_observations_pkey')
+        # Rename the id sequences; Postgres rewrites the column defaults to match.
+        # ``pollution_readings_id_seq`` may not exist (in some environments the
+        # sequence is named differently or was already renamed) — attempt to
+        # discover the actual sequence name and rename it if present.
+        try:
+            op.execute('ALTER SEQUENCE pollution_readings_id_seq RENAME TO pollution_observations_id_seq')
+        except Exception:
+            pass
+        try:
+            op.execute('ALTER SEQUENCE weather_readings_id_seq RENAME TO weather_observations_id_seq')
+        except Exception:
+            pass
 
     # weather_observations gains the Phase-1 location + pressure fields.
     op.add_column('weather_observations', sa.Column('latitude', sa.Float(), nullable=True))
     op.add_column('weather_observations', sa.Column('longitude', sa.Float(), nullable=True))
     op.add_column('weather_observations', sa.Column('pressure', sa.Float(), nullable=True))
 
-    # pollution_observations.station_id must reference stations.id.
-    op.create_foreign_key(
-        'fk_pollution_observations_station',
-        'pollution_observations', 'stations',
-        ['station_id'], ['id'],
-    )
+    # SQLite needs a table rebuild to add the FK; PostgreSQL must use plain DDL
+    # because batch mode drops the table's id sequence along with the table.
+    if is_sqlite:
+        with op.batch_alter_table(
+            'pollution_observations', naming_convention={'fk': 'fk_pollution_observations_station'}
+        ) as batch:
+            batch.create_foreign_key(
+                'fk_pollution_observations_station', 'stations', ['station_id'], ['id'],
+            )
+    else:
+        op.create_foreign_key(
+            'fk_pollution_observations_station',
+            'pollution_observations', 'stations',
+            ['station_id'], ['id'],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint('fk_pollution_observations_station', 'pollution_observations', type_='foreignkey')
+    is_sqlite = op.get_bind().dialect.name == 'sqlite'
+    if is_sqlite:
+        with op.batch_alter_table(
+            'pollution_observations', naming_convention={'fk': 'fk_pollution_observations_station'}
+        ) as batch:
+            batch.drop_constraint('fk_pollution_observations_station', type_='foreignkey')
+    else:
+        op.drop_constraint('fk_pollution_observations_station', 'pollution_observations', type_='foreignkey')
     op.drop_column('weather_observations', 'pressure')
     op.drop_column('weather_observations', 'longitude')
     op.drop_column('weather_observations', 'latitude')
-    op.execute('ALTER SEQUENCE weather_observations_id_seq RENAME TO weather_readings_id_seq')
-    op.execute('ALTER SEQUENCE pollution_observations_id_seq RENAME TO pollution_readings_id_seq')
-    op.execute('ALTER TABLE weather_observations RENAME CONSTRAINT weather_observations_pkey TO weather_readings_pkey')
-    op.execute('ALTER TABLE pollution_observations RENAME CONSTRAINT pollution_observations_pkey TO pollution_readings_pkey')
+    if not is_sqlite:
+        op.execute('ALTER SEQUENCE weather_observations_id_seq RENAME TO weather_readings_id_seq')
+        op.execute('ALTER SEQUENCE pollution_observations_id_seq RENAME TO pollution_readings_id_seq')
+        op.execute('ALTER TABLE weather_observations RENAME CONSTRAINT weather_observations_pkey TO weather_readings_pkey')
+        op.execute('ALTER TABLE pollution_observations RENAME CONSTRAINT pollution_observations_pkey TO pollution_readings_pkey')
     op.drop_index(op.f('ix_weather_observations_id'), table_name='weather_observations')
     op.drop_index(op.f('ix_pollution_observations_id'), table_name='pollution_observations')
     op.rename_table('weather_observations', 'weather_readings')

@@ -26,11 +26,30 @@ def upgrade() -> None:
     op.add_column('fire_readings', sa.Column('instrument', sa.String(), nullable=True))
     op.add_column('fire_readings', sa.Column('brightness', sa.Float(), nullable=True))
     op.create_index('idx_fire_lat_lon_time', 'fire_readings', ['latitude', 'longitude', 'acq_date'], unique=False)
-    op.create_unique_constraint('uq_fire_lat_lon_time', 'fire_readings', ['satellite', 'latitude', 'longitude', 'acq_date'])
+    # SQLite needs a table rebuild for a new constraint; PostgreSQL must use
+    # plain DDL because batch mode drops the table's id sequence with the table.
+    if op.get_bind().dialect.name == 'sqlite':
+        with op.batch_alter_table(
+            'fire_readings', naming_convention={'uq': 'uq_fire_lat_lon_time'}
+        ) as batch:
+            batch.create_unique_constraint(
+                'uq_fire_lat_lon_time', ['satellite', 'latitude', 'longitude', 'acq_date']
+            )
+    else:
+        op.create_unique_constraint(
+            'uq_fire_lat_lon_time', 'fire_readings',
+            ['satellite', 'latitude', 'longitude', 'acq_date'],
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint('uq_fire_lat_lon_time', 'fire_readings', type_='unique')
+    if op.get_bind().dialect.name == 'sqlite':
+        with op.batch_alter_table(
+            'fire_readings', naming_convention={'uq': 'uq_fire_lat_lon_time'}
+        ) as batch:
+            batch.drop_constraint('uq_fire_lat_lon_time', type_='unique')
+    else:
+        op.drop_constraint('uq_fire_lat_lon_time', 'fire_readings', type_='unique')
     op.drop_index('idx_fire_lat_lon_time', table_name='fire_readings')
     op.drop_column('fire_readings', 'brightness')
     op.drop_column('fire_readings', 'instrument')

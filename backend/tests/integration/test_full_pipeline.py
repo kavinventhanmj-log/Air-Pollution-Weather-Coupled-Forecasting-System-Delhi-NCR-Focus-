@@ -26,9 +26,30 @@ class TestForecastPipeline:
         resp = client.get("/api/forecast/Anand Vihar")
         assert resp.status_code == 200
         forecasts = resp.json()
-        assert len(forecasts) >= 12 + 6
-        horizons = {f["horizon_hours"] for f in forecasts[:6]}
+        # The seed writes horizons 1..12; generation is an upsert on
+        # (station_id, horizon_hours), so the six generated horizons are
+        # replaced rather than appended.
+        horizons = [f["horizon_hours"] for f in forecasts]
+        assert len(horizons) == len(set(horizons)), "duplicate horizon rows persisted"
+        assert set(horizons) == set(range(1, 13)) | {24, 48, 72}
         assert 1 in horizons or 6 in horizons
+
+    def test_regeneration_does_not_duplicate_rows(self, client, db_session):
+        """A second generation must replace, not accumulate (upsert contract)."""
+        first = client.post(
+            "/api/forecast/generate", json={"station_name": "Anand Vihar"}
+        )
+        assert first.status_code == 200, first.text
+        count_after_first = len(client.get("/api/forecast/Anand Vihar").json())
+
+        second = client.post(
+            "/api/forecast/generate", json={"station_name": "Anand Vihar"}
+        )
+        assert second.status_code == 200, second.text
+        rows = client.get("/api/forecast/Anand Vihar").json()
+        assert len(rows) == count_after_first
+        horizons = [f["horizon_hours"] for f in rows]
+        assert len(horizons) == len(set(horizons))
 
     def test_ncr_aggregate(self, client, db_session):
         resp = client.get("/api/forecast/ncr")
@@ -129,7 +150,11 @@ class TestExplainability:
                 assert ft["importance"] > 0
         else:
             assert resp.status_code == 503
-            assert "fabricated" not in resp.json().get("detail", "").lower()
+            # ``detail`` is a machine-readable dict for insufficient_data, and a
+            # string for other refusals; neither may claim fabricated values.
+            detail = resp.json().get("detail", "")
+            text = detail if isinstance(detail, str) else str(detail)
+            assert "fabricated" not in text.lower()
 
 
 class TestAlerts:

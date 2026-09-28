@@ -88,8 +88,19 @@ def explain_prediction(model, features: dict) -> list[dict]:
             "no_tree_model: the loaded model exposes no feature names, so SHAP "
             "cannot attribute feature contributions. No fabricated weights are returned."
         )
+    missing = [c for c in cols if features.get(c) is None]
+    if missing:
+        # SHAP on a zero-filled row produces genuine-looking attributions for
+        # inputs that were never measured, which is worse than no explanation:
+        # it reads as evidence. Refuse and name the gap instead.
+        raise RuntimeError(
+            f"missing_features: {len(missing)} of {len(cols)} model features are "
+            f"unavailable for this row (e.g. {', '.join(missing[:5])}). SHAP "
+            "attributions would be computed for values that were never measured, "
+            "so no explanation is returned."
+        )
     explainer = shap.TreeExplainer(_tree_estimator(model))
-    arr = np.array([[features.get(k, 0.0) for k in cols]], dtype=float)
+    arr = np.array([[float(features[k]) for k in cols]], dtype=float)
     shap_values = explainer.shap_values(arr)
     values = np.asarray(shap_values)
     if values.ndim >= 3:

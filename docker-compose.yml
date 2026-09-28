@@ -38,7 +38,10 @@ services:
       - ./models:/app/models:ro
       - ./data:/app/data:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      # /api/health (liveness) not /health (readiness): /health round-trips
+      # Postgres and can exceed this 5s timeout on a cold database, which would
+      # mark a healthy container unhealthy and restart it in a loop.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
       timeout: 5s
       retries: 5

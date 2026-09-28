@@ -34,6 +34,17 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     buildCommand: pip install -r backend/requirements.txt
+    # Apply schema migrations before the new release starts serving. Without this
+    # the app boots against a stale schema and every request that touches a new
+    # column (re_stamped, forecast_runs) fails at runtime instead of at deploy.
+    # `migrate_safely.py` rather than a bare `alembic upgrade head`: deployments
+    # created before this chain was fixed ran against a database with no
+    # `alembic_version` table (see Database & Migrations in the README), and a
+    # bare upgrade replays the whole chain against existing tables and fails.
+    # The script detects that state and stamps instead. `alembic/env.py` puts
+    # backend/ first on sys.path so the repo-root `app/` shim cannot shadow the
+    # real package.
+    preDeployCommand: python backend/scripts/migrate_safely.py
     startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL

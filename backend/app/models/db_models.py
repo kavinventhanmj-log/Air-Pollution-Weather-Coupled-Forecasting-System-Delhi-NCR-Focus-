@@ -1,3 +1,4 @@
+import sqlalchemy as sa
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.sql import func
 
@@ -40,15 +41,29 @@ class PollutionReading(Base):
     # (data_gov_in | opencity_ckan | cpcb_dataset | cpcb_live). NULL for legacy
     # rows ingested before the column existed.
     data_source = Column(String)
+    # True when the row is a forward re-stamp of an older observation (see
+    # backend/scripts/bootstrap_recent.py) rather than a fresh measurement.
+    # Surfaced in forecast provenance so a synthetic "recent" history can never
+    # be presented as live sensor data. NULL on real readings.
+    re_stamped = Column(Boolean, default=False, nullable=False, server_default=sa.false())
     __table_args__ = (
-        UniqueConstraint("station_id", "timestamp", name="uq_pollution_station_ts"),
+        # Declared as a unique INDEX rather than a UniqueConstraint because the
+        # Alembic migration (b9c9f4d1a7e2) creates it that way. A table
+        # constraint added via ALTER TABLE is equivalent for enforcement, but
+        # expressing it as an index here keeps `alembic revision --autogenerate`
+        # from reporting a permanent index <-> constraint mismatch.
+        Index("uq_pollution_station_ts", "station_id", "timestamp", unique=True),
         Index("idx_pollution_station_time", "station_id", "timestamp"),
     )
 
 class WeatherReading(Base):
     __tablename__ = "weather_observations"
     id = Column(Integer, primary_key=True, index=True)
-    station_id = Column(Integer, nullable=False)
+    station_id = Column(
+        Integer,
+        ForeignKey("stations.id", name="fk_weather_station_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     timestamp = Column(DateTime(timezone=True), nullable=False)
     latitude = Column(Float)
     longitude = Column(Float)
@@ -103,7 +118,11 @@ class FireReading(Base):
 class Forecast(Base):
     __tablename__ = "forecasts"
     id = Column(Integer, primary_key=True, index=True)
-    station_id = Column(Integer, nullable=False)
+    station_id = Column(
+        Integer,
+        ForeignKey("stations.id", name="fk_forecast_station_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     forecast_timestamp = Column(DateTime(timezone=True), nullable=False)
     horizon_hours = Column(Integer, nullable=False)
@@ -122,13 +141,68 @@ class Forecast(Base):
     coupling_stability = Column(Float)
     coupling_mode = Column(String)
     __table_args__ = (
+        # One row per (station, horizon): regenerating a forecast replaces it
+        # instead of accumulating duplicates that make history look like a
+        # single day. Enforced in the DB, not just in the upsert helper.
+        UniqueConstraint(
+            "station_id", "horizon_hours", name="uq_forecast_station_horizon"
+        ),
         Index("idx_forecast_station_time", "station_id", "forecast_timestamp"),
+        Index("idx_forecast_horizon", "horizon_hours"),
+    )
+
+class ForecastRun(Base):
+    """Audit trail of every forecast generation attempt (SIH honesty requirement).
+
+    A run is written whether the forecast succeeded, fell back, or was refused
+    for insufficient data. ``status`` is one of ``succeeded`` / ``fallback`` /
+    ``refused``; the provenance columns mirror the ``ForecastProvenance`` block
+    returned to the caller, so a reviewer can reconstruct what the system knew
+    at the moment a number was published instead of trusting the number alone.
+    """
+
+    __tablename__ = "forecast_runs"
+    id = Column(Integer, primary_key=True, index=True)
+    station_id = Column(
+        Integer,
+        ForeignKey("stations.id", name="fk_forecast_run_station_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    station_name = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status = Column(String, nullable=False)  # succeeded | fallback | refused
+    refusal_code = Column(String)  # e.g. insufficient_data
+    refusal_reason = Column(String)
+    model = Column(String)
+    model_artifact = Column(String)
+    model_artifact_sha256 = Column(String)
+    fallback_used = Column(Boolean, default=False, nullable=False, server_default=sa.false())
+    fallback_reason = Column(String)
+    horizons = Column(String)  # comma-separated horizon list
+    history_rows = Column(Integer, default=0, nullable=False, server_default="0")
+    pollution_rows = Column(Integer, default=0, nullable=False, server_default="0")
+    weather_rows = Column(Integer, default=0, nullable=False, server_default="0")
+    fire_rows = Column(Integer, default=0, nullable=False, server_default="0")
+    window_start = Column(DateTime)
+    window_end = Column(DateTime)
+    latest_observation = Column(DateTime)
+    observation_age_hours = Column(Float)
+    is_stale = Column(Boolean, default=False, nullable=False, server_default=sa.false())
+    is_demo = Column(Boolean, default=False, nullable=False, server_default=sa.false())
+    is_re_stamped = Column(Boolean, default=False, nullable=False, server_default=sa.false())
+    data_source = Column(String)
+    __table_args__ = (
+        Index("idx_forecast_run_station_time", "station_id", "created_at"),
     )
 
 class Alert(Base):
     __tablename__ = "alerts"
     id = Column(Integer, primary_key=True, index=True)
-    station_id = Column(Integer, nullable=False)
+    station_id = Column(
+        Integer,
+        ForeignKey("stations.id", name="fk_alert_station_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     alert_level = Column(String, nullable=False)
     title = Column(String, nullable=False)
@@ -225,4 +299,5 @@ class CouplingState(Base):
     pollution_reading_timestamp = Column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("station_id", name="uq_coupling_state_station"),
+        Index("ix_coupling_states_station_id", "station_id"),
     )

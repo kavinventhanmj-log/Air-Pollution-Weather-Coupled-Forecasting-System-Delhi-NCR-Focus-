@@ -3,6 +3,103 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.18.0] - 2026-09-28
+
+### Added
+
+- **Refusal-over-fabrication contract** in the forecast path. `MIN_FEATURE_ROWS = 2`
+  and `STALE_AFTER_HOURS = 6.0`; under-powered or stale stations return
+  `503 insufficient_data` with a machine-readable payload instead of a number.
+  `None`/`NaN` propagate as `None` rather than being coerced to `0.0`.
+  New suite `backend/tests/unit/test_forecast_data_sufficiency.py` (20 tests).
+- **`forecast_runs` audit table** (`ForecastRun`) recording every generation
+  attempt — succeeded / fallback / refused — with model name, artifact SHA-256,
+  history row counts, observation window, and provenance flags. Both forecast
+  endpoints now write a run; refusals are recorded, not swallowed.
+- **`pollution_observations.re_stamped`** so rows copied forward by the demo
+  bootstrap are distinguishable from live sensor data in forecast provenance.
+  `bootstrap_recent.py` stamps every row it writes.
+- `backend/scripts/audit_re_stamps.py` — read-only helper that lists candidate
+  legacy re-stamp rows for manual review instead of mutating them.
+- `backend/scripts/entrypoint.sh` — container entrypoint that migrates, then
+  `exec`s uvicorn (staying PID 1) and refuses to start on migration failure.
+- `backend/scripts/migrate_safely.py` — guarded migration entrypoint used by both
+  `render.yaml` (`preDeployCommand`) and `entrypoint.sh`. Detects whether the
+  database is `versioned`, `unversioned` (tables present, no `alembic_version`),
+  or `empty`, and upgrades or stamps accordingly. `--status` reports without
+  writing; `--force-upgrade` replays the chain deliberately. 19 regression tests
+  in `backend/tests/unit/test_migrate_safely.py` pin the decision, including
+  assertions that the deploy configs and Dockerfile do not regress to a bare
+  `alembic upgrade head`.
+- `preDeployCommand: python backend/scripts/migrate_safely.py` in `render.yaml`.
+- Station foreign keys on `weather_observations`, `forecasts`, and `alerts`;
+  unique `(station_id, horizon_hours)` on `forecasts` with an idempotent
+  `_upsert_forecasts()` replacing append-per-regeneration.
+- Alembic revision `b8d3f1a9c4e2` (new head).
+
+### Fixed
+
+- **The Alembic chain had never completed on either engine.** Four independent
+  defects:
+  1. `alembic/env.py` skipped its `sys.path` insert when `PYTHONPATH` already
+     contained the backend root, so the repo-root `app/` Render shim shadowed
+     `backend/app` → `ModuleNotFoundError: No module named 'app.database'`.
+  2. `f6a2e7b3c8d9` and `b9c9f4d1a7e2` used PostgreSQL-only `DELETE ... USING`.
+  3. `d4a1e4c9f0b2` and `e2b1c3d4a5f7` used `ALTER SEQUENCE` /
+     `RENAME CONSTRAINT` / plain constraint DDL that SQLite rejects.
+  4. The baseline created `id` as a bare `Integer` with no `SERIAL`, so
+     `d4a1e4c9f0b2` failed on a missing `pollution_readings_id_seq`. Because
+     `main.py` swallowed migration exceptions, the production schema was in fact
+     built by `Base.metadata.create_all()` with **no `alembic_version` table**.
+     The baseline now declares `autoincrement=True`.
+- **A bare `alembic upgrade head` in `preDeployCommand` would have failed every
+  deploy against the existing production database.** Because that database has
+  tables but no `alembic_version`, Alembic replays the whole chain against
+  itself, every `CREATE TABLE` collides with an existing table, and the failure
+  is non-idempotent — so each subsequent deploy fails the same way. Deploy
+  targets now run `migrate_safely.py`, which stamps that state instead. It also
+  refuses to stamp when recently added tables are missing, since claiming head
+  there would hide a real schema gap until runtime.
+- `migrate_safely.py` had to place `backend/` ahead of the repo root on
+  `sys.path`, mirroring `alembic/env.py`; a repo-root-first ordering made
+  `import app` resolve to the Render shim and raised
+  `ModuleNotFoundError: No module named 'app.database'`. Its `alembic_version`
+  probe uses the SQLAlchemy inspector rather than PostgreSQL's `to_regclass()`
+  so the SQLite development path works too. The `Dockerfile` now copies the
+  script, which `entrypoint.sh` invokes.
+- **Batch mode on PostgreSQL silently dropped owned id sequences.**
+  `batch_alter_table` rebuilds the table and replaces the sequence with
+  `_alembic_tmp_<table>_id_seq`, orphaning later inserts. Batch mode is now
+  SQLite-only; PostgreSQL uses plain `ALTER TABLE … ADD CONSTRAINT`.
+  `b9c9f4d1a7e2` now creates a unique *index* for the same reason.
+- `docker-compose.yml` healthcheck pointed at `/health`, which round-trips
+  Postgres and exceeds the 5 s timeout on a cold database — a restart loop. Now
+  uses `/api/health` (liveness), matching the `Dockerfile` and `render.yaml`.
+- Station-scoped provenance: an empty station no longer inherits a neighbour's
+  latest-reading timestamp. Missing PBL persists as `NULL` instead of `500.0`.
+  SHAP no longer zero-fills unavailable inputs. Calm wind (a genuine `0.0`) is no
+  longer treated as missing. `transport_risk_service` preserves genuine zeros.
+- `/api/explanation/{station}` repointed to the matched `models/pm25` feature +
+  SHAP path (was reading a mismatched per-station feature row) and now maps
+  missing-data errors to a structured `503 insufficient_data`.
+- ORM/migration naming parity for all station FKs and `ix_forecast_runs_id`;
+  `alembic revision --autogenerate` now reports **zero drift** on both SQLite
+  and PostgreSQL 16.
+
+### Changed
+
+- `re_stamped` is **not** backfilled for historical rows. The original pm25
+  heuristic was measured against the real database and flagged 116,029 of
+  133,407 rows (87%); a full-value-tuple fallback mostly matched all-`NULL` /
+  `aqi=0` rows. No heuristic can distinguish a legacy re-stamp from a genuine
+  repeat, so existing rows stay `false` and `audit_re_stamps.py` supports manual
+  review instead.
+- README rewritten: accurate test count (960), corrected health-probe guidance,
+  new "Refusal Over Fabrication" and "Database & Migrations" sections, the
+  `migrate_safely.py` decision table, a candid "Known Issues" section, and a
+  deployment-status note recording that the hosted Render backend was
+  unreachable when verified on 2026-09-28.
+
 ## [1.17.0] - 2026-09
 
 ### Fixed (live dashboard URL pointed at a stale Vercel project)

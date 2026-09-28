@@ -178,7 +178,16 @@ def test_generate_forecast_uses_db_readings(db_session):
         assert len(forecasts) == 2
         assert len(predictions) == 2
         assert forecasts[0].station_id == station.id
-        assert session.query(Forecast).filter(Forecast.station_id == station.id).count() == 12 + 2
+        # The seed already wrote horizons 1..12, so the generated t+1h row
+        # replaces the seeded one and only t+24h is new: 12 + 1, not 12 + 2.
+        rows = (
+            session.query(Forecast)
+            .filter(Forecast.station_id == station.id)
+            .all()
+        )
+        assert len(rows) == 12 + 1
+        horizons = [r.horizon_hours for r in rows]
+        assert len(horizons) == len(set(horizons)), "duplicate horizon rows persisted"
     session.close()
 
 

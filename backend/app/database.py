@@ -186,6 +186,16 @@ def apply_migrations():
             if _name not in pr_cols:
                 with engine.begin() as conn:
                     conn.execute(sa.text(f"ALTER TABLE pollution_observations ADD COLUMN {_name} FLOAT"))
+        # re_stamped: marks a row that is a forward copy of an older
+        # observation rather than a fresh measurement, so forecast provenance
+        # cannot present synthetic recent history as live sensor data. Mirrors
+        # alembic b8d3f1a9c4e2. Existing rows stay 0 (real ingest).
+        if "re_stamped" not in pr_cols:
+            with engine.begin() as conn:
+                conn.execute(sa.text(
+                    "ALTER TABLE pollution_observations "
+                    "ADD COLUMN re_stamped BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
     # weather_observations vertical profile columns
     if "weather_observations" in table_names:
@@ -256,6 +266,30 @@ def apply_migrations():
         for name, dtype in add_columns.items():
             if name not in existing_cols:
                 conn.execute(sa.text(f"ALTER TABLE forecasts ADD COLUMN {name} {dtype}"))
+
+    # forecasts UNIQUE(station_id, horizon_hours) - mirrors alembic
+    # b8d3f1a9c4e2. Without it, every regeneration appends another row for the
+    # same horizon, so 24h of forecast accumulates into N days of apparent
+    # history. Collapse existing duplicates to the newest row per horizon first.
+    with engine.begin() as conn:
+        conn.execute(sa.text(
+            "DELETE FROM forecasts WHERE id NOT IN ("
+            "  SELECT MAX(id) FROM forecasts"
+            "  GROUP BY station_id, horizon_hours)"
+        ))
+        conn.execute(sa.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_forecast_station_horizon"
+            " ON forecasts (station_id, horizon_hours)"
+        ))
+        conn.execute(sa.text(
+            "CREATE INDEX IF NOT EXISTS idx_forecast_horizon ON forecasts (horizon_hours)"
+        ))
+
+    # forecast_runs audit trail. Base.metadata.create_all() builds it on a fresh
+    # database; this only matters for an existing SQLite file.
+    if "forecast_runs" not in table_names:
+        from .models.db_models import ForecastRun
+        ForecastRun.__table__.create(bind=engine, checkfirst=True)
 
 
 def get_db():

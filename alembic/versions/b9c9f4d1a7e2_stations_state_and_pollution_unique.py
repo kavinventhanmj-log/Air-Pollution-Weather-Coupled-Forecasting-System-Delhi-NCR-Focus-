@@ -27,20 +27,30 @@ def upgrade() -> None:
     # Pre-existing rows (from the earlier opencity.in pipeline) may contain
     # duplicate (station_id, timestamp) pairs; deduplicate before adding the
     # unique constraint so Postgres accepts it (keep the row with max id).
+    # Correlated form rather than PostgreSQL's ``DELETE ... USING`` so this
+    # migration also runs on the SQLite development database.
     op.execute(
         """
-        DELETE FROM pollution_readings a
-        USING pollution_readings b
-        WHERE a.id < b.id
-          AND a.station_id = b.station_id
-          AND a.timestamp = b.timestamp
+        DELETE FROM pollution_readings
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM pollution_readings
+            GROUP BY station_id, timestamp
+        )
         """
     )
-    op.create_unique_constraint(
-        'uq_pollution_station_ts', 'pollution_readings', ['station_id', 'timestamp']
-    )
+    # Create the unique constraint as a UNIQUE INDEX rather than a table
+    # constraint. On PostgreSQL a table constraint added via ALTER TABLE leaves
+    # the id sequence alone, but the earlier version of this migration used
+    # Alembic batch mode, which rebuilds the table and REPLACES the owned
+    # sequence with ``_alembic_tmp_<table>_id_seq``. That orphaned name then
+    # broke the very next revision (d4a1e4c9f0b2) with
+    # ``relation "pollution_readings_id_seq" does not exist``. A unique index
+    # enforces the same thing without touching the sequence.
+    op.create_index('uq_pollution_station_ts', 'pollution_readings',
+                    ['station_id', 'timestamp'], unique=True)
 
 
 def downgrade() -> None:
-    op.drop_constraint('uq_pollution_station_ts', 'pollution_readings', type_='unique')
+    op.drop_index('uq_pollution_station_ts', table_name='pollution_readings')
     op.drop_column('stations', 'state')

@@ -161,6 +161,39 @@ class ForecastGenerateRequest(BaseModel):
     station_name: str | None = None
     horizons: list[int] = Field(default_factory=lambda: [1, 6, 12, 24, 48, 72])
 
+class ForecastProvenance(BaseModel):
+    """Where a forecast's inputs came from, and how much to trust it.
+
+    Every forecast response carries this so the UI (and any reviewer) can tell a
+    model-driven number from a lightly-supported one, and can state the real
+    data window instead of implying "now".
+    """
+
+    model: str
+    model_artifact: str | None = None
+    model_artifact_sha256: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    pooled_features: bool = False
+    composite_sources: list[str] = Field(default_factory=list)
+    pollution_rows: int = 0
+    weather_rows: int = 0
+    fire_rows: int = 0
+    history_rows: int = 0
+    window_start: str | None = None
+    window_end: str | None = None
+    latest_observation: datetime | None = None
+    observation_age_hours: float | None = None
+    is_stale: bool = False
+    is_demo: bool = False
+    is_re_stamped: bool = False
+    data_source: str | None = None
+    # The station this provenance describes. Scoped so a UI can never attach
+    # one station's data window to another station's forecast.
+    station: str | None = None
+    generated_at: datetime
+    note: str | None = None
+
 class ForecastGenerateResponse(BaseModel):
     station: str
     generated_at: datetime
@@ -172,6 +205,7 @@ class ForecastGenerateResponse(BaseModel):
     pooled_features: bool = False
     local_readings: int = 0
     history_days: float | None = None
+    provenance: ForecastProvenance | None = None
 
 class ForecastComparisonPoint(BaseModel):
     timestamp: datetime

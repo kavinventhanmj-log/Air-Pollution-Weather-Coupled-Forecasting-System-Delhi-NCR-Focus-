@@ -63,6 +63,8 @@ def bootstrap_pollution(db, anchor_minute: int) -> int:
                 so2=latest.so2,
                 co=latest.co,
                 aqi=latest.aqi,
+                data_source=latest.data_source,
+                re_stamped=True,
             ))
             existing.add(ts)
         if rows:
