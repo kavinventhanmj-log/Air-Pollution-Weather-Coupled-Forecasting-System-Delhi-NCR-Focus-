@@ -33,3 +33,5 @@ data/processed/featured_dataset.csv
 # regenerable ML byproducts (available via ml/training/train_pm25.py + build_training_dataset.py)
 models/pm25/training_predictions.csv
 data/ml/
+# Vercel project link (contains projectId/orgId) - never commit
+.vercel/

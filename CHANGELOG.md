@@ -3,6 +3,34 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.22.0] - 2026-09-29
+
+### Fixed
+
+- **The site no longer hangs on "Connecting to the API server" after a cold
+  start.** The shared warm-up gate gave itself a 25 s budget, but a Render
+  free-tier wake takes far longer than that — measured live at **105.6 s**
+  through the Vercel proxy on this deployment. The gate therefore expired while
+  the container was still booting, every panel then re-issued its request into a
+  dead socket, and the dashboard stayed on the connecting banner indefinitely
+  until a manual reload. The budget is now 150 s with 60 attempts, so the
+  deadline rather than the attempt cap governs the wait, and the banner shows a
+  live elapsed-time counter so a genuine one-to-two minute wait reads as
+  progress instead of a broken page.
+- **The warm-up gate no longer trusts the CDN alone.** Real traffic reaches the
+  backend through the Vercel rewrite, and that edge answers `502`/`504` with its
+  own shorter timeout while Render is still booting — so the proxy could report
+  "down" for an instance that had in fact just come up, and the gate would sit
+  there for the full budget and then give up on a live backend. The gate now
+  probes the backend origin directly as well, and either signal counts.
+- Per-request transient retries raised 3 -> 4 as a second line of defence behind
+  the shared gate.
+
+### Changed
+
+- `.vercel/` is now ignored. The Vercel project link file carries the project and
+  org identifiers and must not be committed.
+
 ## [1.21.0] - 2026-09-29
 
 ### Fixed
