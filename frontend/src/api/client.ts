@@ -56,22 +56,23 @@ api.interceptors.request.use((config) => {
 // then retries its request. Idempotent GETs (and the two pure compute POSTs
 // /forecast/coupled and /scenario/analysis, which only read stored data and
 // compute) take part in this wake-and-retry.
-// Bounded so a cold start cannot hold the page hostage. The previous
-// 12 x 8000 ms = up to 96 s meant a blank dashboard for a minute and a half
-// before the first panel was even requested. The gate now gives up after
-// WARM_BUDGET_MS and lets the per-request interceptor retries (plus the
-// dashboard's own self-heal) carry the remainder.
-const MAX_WARM_ATTEMPTS = 10
+// The budget must EXCEED the wake it is waiting for, or the gate is useless.
+// A production Render cold wake measured 76 s and Render's own spin-up runs
+// 45-120 s, so a 25 s budget guaranteed failure: the gate expired while the
+// container was still booting, every panel then re-issued into a dead socket,
+// and the page was stuck on "Connecting to the API server" for good. 150 s
+// covers the slow end of Render's range with margin; the gate is only ever
+// reached by a request that has already failed once, so a generous budget
+// costs nothing when the backend is healthy (the first probe returns at once).
+const MAX_WARM_ATTEMPTS = 60
 const WARM_RETRY_DELAY_MS = 2500
-const WARM_BUDGET_MS = 25_000
-const WARM_PROBE_TIMEOUT_MS = 5000
+const WARM_BUDGET_MS = 150_000
+const WARM_PROBE_TIMEOUT_MS = 8000
 
-// Per-request retries for a transient failure. Three, not two: a Render cold
-// wake measured 76 s in production, and each attempt can burn a 25 s warm-up
-// budget before the request is even re-issued. Two retries gave up at roughly
-// the 50 s mark — still inside the wake window — which is how panels ended up
-// permanently empty on a page opened during a cold start.
-const MAX_RETRIES = 3
+// Per-request retries for a transient failure. Each retry waits behind the
+// shared gate first, so this is a second line of defence behind
+// WARM_BUDGET_MS rather than a way to escape a still-booting instance.
+const MAX_RETRIES = 4
 
 // A sleeping instance answers with 502/503 *and* 429 (Render throttles the
 // wake-up burst). 429 used to fall through as a hard error, which is what put
@@ -126,17 +127,35 @@ let warmUpPromise: Promise<boolean> | null = null
 // same-origin `fetch` carries no interceptors, so the gate is structurally
 // incapable of re-entering itself, and `AbortController` guarantees each
 // attempt settles even if the socket hangs.
-async function probeAlive(timeoutMs: number): Promise<boolean> {
+// The backend origin is public — it is already hardcoded in vercel.json and in
+// the deployment docs — so probing it directly adds no secret to the bundle.
+const DIRECT_API_ORIGIN = 'https://air-pollution-weather-coupled.onrender.com'
+
+const WARM_PROBE_URLS = ['/api/health', `${DIRECT_API_ORIGIN}/api/health`]
+
+async function probeOne(url: string, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const res = await fetch('/api/health', { signal: controller.signal, cache: 'no-store' })
+    const res = await fetch(url, { signal: controller.signal, cache: 'no-store' })
     return res.ok
   } catch {
     return false
   } finally {
     clearTimeout(timer)
   }
+}
+
+// The gate does NOT rely on the same-origin path alone. Real requests reach the
+// backend through the Vercel rewrite, and that edge answers 502/504 with its own
+// (shorter) timeout while Render is still booting — so the proxy reports "down"
+// for an instance that has in fact just come up, and a gate that believed it
+// would sit there for the whole budget and then give up. The backend origin is
+// probed directly as well and either signal is enough, which keeps the gate
+// independent of how the CDN happens to be behaving that minute.
+async function probeAlive(timeoutMs: number): Promise<boolean> {
+  const results = await Promise.all(WARM_PROBE_URLS.map((url) => probeOne(url, timeoutMs)))
+  return results.some(Boolean)
 }
 
 async function ensureWarm(): Promise<boolean> {

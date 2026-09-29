@@ -61,6 +61,24 @@ import type {
 // retry is issued against an instance that has had time to finish booting.
 const SELF_HEAL_DELAYS_MS = [4_000, 10_000, 20_000, 30_000, 45_000, 60_000, 60_000]
 
+// A cold start on the free tier is a genuine 45-120 s wait. Showing a frozen
+// "Connecting…" line for that long reads as a broken page, so the banner counts
+// up and says what is happening: the gate is polling, and it will resolve into
+// the dashboard on its own once the container is listening.
+function useElapsed(active: boolean): number {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    if (!active) {
+      setElapsed(0)
+      return
+    }
+    const started = Date.now()
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [active])
+  return elapsed
+}
+
 interface WindVectorInput {
   lat: number
   lon: number
@@ -114,6 +132,7 @@ export default function Dashboard() {
   const [failedPanels, setFailedPanels] = useState<string[]>([])
   const [selfHealAttempt, setSelfHealAttempt] = useState(0)
   const [warming, setWarming] = useState(false)
+  const warmElapsed = useElapsed(warming)
   const [autoRefresh, setAutoRefresh] = useState(false)
 
   const stationId = stations.find((s) => s.name === selected)?.id ?? null
@@ -244,9 +263,14 @@ export default function Dashboard() {
       )}
 
       {warming && (
-        <div className="flex items-center gap-2 rounded-lg border border-inst-200 bg-inst-50 px-4 py-2.5 text-sm text-inst-800" role="status">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-inst-200 bg-inst-50 px-4 py-2.5 text-sm text-inst-800" role="status">
           <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-inst-600" aria-hidden="true" />
           Connecting to the API server — the free-tier backend may be waking up…
+          {warmElapsed >= 3 && (
+            <span className="text-inst-700">
+              Still waking the server ({warmElapsed}s). This can take up to ~2 minutes on the free tier; the page will load itself.
+            </span>
+          )}
         </div>
       )}
 
