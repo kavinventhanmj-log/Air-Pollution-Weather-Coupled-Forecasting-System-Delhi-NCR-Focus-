@@ -21,10 +21,22 @@ const tabs = [
 
 const ctxNum = (v: number | null | undefined, digits = 1) => (v === null || v === undefined ? '--' : v.toFixed(digits))
 
-function bandClass(v: number | null | undefined): string {
+/**
+ * Colour a 0..1 tendency value by severity.
+ *
+ * `higherIsBetter` is needed because `dispersion_potential` is the complement of
+ * the rest: the coupling engine defines it as how readily the atmosphere
+ * disperses pollutants (ml/features/coupling_engine.py), and
+ * `accumulation_potential` as `1 - dispersion_potential`. So a high dispersion
+ * value is the favourable end, while high values in the other five columns are
+ * the concerning end. Applying one "high = red" rule to all six made
+ * dispersion_potential red precisely when dispersion was strong.
+ */
+function bandClass(v: number | null | undefined, higherIsBetter = false): string {
   if (v === null || v === undefined) return 'text-slate-400'
-  if (v < 0.33) return 'text-emerald-600'
-  if (v < 0.66) return 'text-amber-600'
+  const severity = higherIsBetter ? 1 - v : v
+  if (severity < 0.33) return 'text-emerald-600'
+  if (severity < 0.66) return 'text-amber-600'
   return 'text-rose-600'
 }
 
@@ -227,7 +239,7 @@ export default function Forecast72h() {
                           {h.inversion_category ?? '--'}
                           {h.inversion_source === 'lapse_rate' ? ' • lapse-rate' : h.inversion_source ? ' • proxy' : ''}
                         </td>
-                        <td className={`py-1.5 text-right font-semibold tabular-nums ${bandClass(h.dispersion_potential)}`}>{ctxNum(h.dispersion_potential, 2)}</td>
+                        <td className={`py-1.5 text-right font-semibold tabular-nums ${bandClass(h.dispersion_potential, true)}`}>{ctxNum(h.dispersion_potential, 2)}</td>
                         <td className={`py-1.5 text-right font-semibold tabular-nums ${bandClass(h.accumulation_potential)}`}>{ctxNum(h.accumulation_potential, 2)}</td>
                         <td className={`py-1.5 text-right tabular-nums ${bandClass(h.pollution_stagnation_index)}`}>{ctxNum(h.pollution_stagnation_index, 2)}</td>
                         <td className={`py-1.5 text-right tabular-nums ${bandClass(h.fire_transport_influence)}`}>{ctxNum(h.fire_transport_influence, 2)}</td>

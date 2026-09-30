@@ -32,7 +32,14 @@ export default function InversionPanel({ data }: { data: InversionData | null })
   }[data.dispersion_condition ?? ''] || 'text-slate-500'
 
   const pct = data.inversion_strength_score != null ? Math.round(data.inversion_strength_score * 100) : null
-  const width = data.inversion_strength === 'Strong'
+  // Drive the bar from the numeric strength score rather than from label buckets,
+  // so it agrees with the percentage printed right next to it. The label buckets
+  // gave every Moderate inversion the same 65% regardless of its actual score,
+  // and disagreed with the score whenever the two fell in different buckets.
+  // Keep the label buckets only as the fallback when no score is available.
+  const width = pct !== null
+    ? `${Math.max(2, Math.min(100, pct))}%`
+    : data.inversion_strength === 'Strong'
     ? '100%'
     : data.inversion_strength === 'Moderate'
     ? '65%'

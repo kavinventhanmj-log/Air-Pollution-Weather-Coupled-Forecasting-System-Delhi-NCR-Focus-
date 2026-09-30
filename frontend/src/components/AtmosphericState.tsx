@@ -8,6 +8,19 @@ interface Props {
   atmosphere: StationAtmosphere | null
 }
 
+/**
+ * Each driver, with the polarity the backend assigns it.
+ *
+ * `higherIsBetter` is true for wind, PBL and ventilation: a larger normalised
+ * value means the atmosphere flushes pollutants more readily. It is false for
+ * inversion and trapping, where a larger value means more retention. The
+ * backend states this contract in atmosphere_service: "higher wind/pbl/
+ * ventilation mean more dispersion, higher inversion/trapping mean more
+ * trapping".
+ *
+ * Both the stagnation gauge and the per-driver bars need the polarity, so it
+ * lives with the driver definitions rather than being inferred at each site.
+ */
 const DRIVERS: Array<{
   key: keyof AtmosphereFeatures
   icon: typeof Wind
@@ -15,43 +28,56 @@ const DRIVERS: Array<{
   value: (a: StationAtmosphere) => string
   sub: (a: StationAtmosphere) => string
   norm: (a: StationAtmosphere) => number | null
+  higherIsBetter: boolean
 }> = [
   {
     key: 'wind', icon: Wind, label: 'Surface wind',
     value: (a) => `${fmt(a.wind.wind_speed_mps, 1)} m/s`,
     sub: (a) => `${a.wind.compass_from ?? '--'} · ${a.wind.label}`,
     norm: (a) => a.wind.normalized,
+    higherIsBetter: true,
   },
   {
     key: 'pbl', icon: Cloud, label: 'Boundary layer',
     value: (a) => `${fmt(a.pbl.pbl_height_m)} m`,
     sub: (a) => a.pbl.label,
     norm: (a) => a.pbl.normalized,
+    higherIsBetter: true,
   },
   {
     key: 'ventilation', icon: Factory, label: 'Ventilation',
     value: (a) => `${fmt(a.ventilation.ventilation_coefficient_m2s)} m²/s`,
     sub: (a) => a.ventilation.label,
     norm: (a) => a.ventilation.normalized,
+    higherIsBetter: true,
   },
   {
     key: 'inversion', icon: Layers, label: 'Inversion',
     value: (a) => (a.inversion?.detected ? (a.inversion.category ?? 'Detected') : 'None'),
     sub: (a) => a.inversion?.dispersion_condition ?? 'No lapse-rate profile',
     norm: (a) => a.inversion?.normalized ?? null,
+    higherIsBetter: false,
   },
   {
     key: 'trapping', icon: Mountain, label: 'Trapping',
     value: (a) => fmt(a.trapping.score, 2),
     sub: (a) => a.trapping.label,
     norm: (a) => a.trapping.normalized,
+    higherIsBetter: false,
   },
 ]
 
-function band(n: number | null): string {
+/**
+ * Colour a driver's raw bar by whether its own polarity is favourable.
+ *
+ * Previously one function banded every driver as "high = bad", so a strong wind
+ * and a deep trapping both rendered red even though they mean opposite things.
+ */
+function band(n: number | null, higherIsBetter: boolean): string {
   if (n == null) return STATUS.muted
-  if (n >= 0.7) return STATUS.bad
-  if (n >= 0.45) return STATUS.warn
+  const unfavourable = higherIsBetter ? 1 - n : n
+  if (unfavourable >= 0.7) return STATUS.bad
+  if (unfavourable >= 0.45) return STATUS.warn
   return STATUS.good
 }
 
@@ -68,9 +94,19 @@ export default function AtmosphericState({ atmosphere }: Props) {
     )
   }
 
-  const norms = DRIVERS.map((d) => d.norm(atmosphere)).filter((v): v is number => v != null)
-  const handicap = norms.length ? norms.reduce((s, v) => s + v, 0) / norms.length : null
-  const pct = handicap != null ? Math.round(handicap * 100) : null
+  // Convert every driver to a common "stagnation" scale (higher = worse) before
+  // averaging. Averaging the raw normalised values mixed favourable drivers
+  // (wind, PBL, ventilation) with unfavourable ones (inversion, trapping), so a
+  // well-ventilated atmosphere could register as highly stagnant.
+  const stagnation = DRIVERS
+    .map((d) => {
+      const n = d.norm(atmosphere)
+      return n == null ? null : d.higherIsBetter ? 1 - n : n
+    })
+    .filter((v): v is number => v != null)
+  const pct = stagnation.length
+    ? Math.round((stagnation.reduce((s, v) => s + v, 0) / stagnation.length) * 100)
+    : null
   const gaugeColor = pct == null ? STATUS.muted : pct >= 70 ? STATUS.bad : pct >= 45 ? STATUS.warn : STATUS.good
 
   return (
@@ -122,7 +158,7 @@ export default function AtmosphericState({ atmosphere }: Props) {
                   <div className="mt-1 h-1.5 w-full rounded-full bg-slate-200">
                     <div
                       className="h-1.5 rounded-full transition-all"
-                      style={{ width: `${n != null ? Math.round(n * 100) : 0}%`, backgroundColor: band(n) }}
+                      style={{ width: `${n != null ? Math.round(n * 100) : 0}%`, backgroundColor: band(n, d.higherIsBetter) }}
                     />
                   </div>
                 </div>
@@ -133,8 +169,10 @@ export default function AtmosphericState({ atmosphere }: Props) {
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-        Drivers come from live station diagnostics; the aggregate is the mean of available normalised values and is
-        labelled Estimated — it is not an official dispersion metric. Analysed {tsFmt(atmosphere.analyzed_at)}.
+        Drivers come from live station diagnostics. Each is flipped to a common stagnation scale — wind, boundary-layer
+        and ventilation drivers inverted, inversion and trapping used as-is — before the mean, so a larger number always
+        means a stronger dispersion constraint. Labelled Estimated; not an official dispersion metric. Analysed{' '}
+        {tsFmt(atmosphere.analyzed_at)}.
       </p>
     </section>
   )

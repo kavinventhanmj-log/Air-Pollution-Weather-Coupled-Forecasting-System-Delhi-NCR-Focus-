@@ -13,10 +13,41 @@ import { STATUS } from '../lib/theme'
 import { getStations, getWeather, getInversion, getCoupling, getCouplingFeatures, getAtmosphereCurrent } from '../api/client'
 import type { Station, WeatherData, InversionData, CouplingData, CouplingFeaturesResponse, AtmosphereCurrentResponse } from '../types'
 
-function FeatureBar({ label, feature }: { label: string; feature: { value: number | null; available: boolean; basis?: string } | undefined }) {
+/**
+ * A labelled 0..1 feature bar.
+ *
+ * `higherIsBetter` marks the one feature whose polarity is the reverse of the
+ * rest. The coupling engine documents the contract in ml/features/coupling_engine.py:
+ * "higher = more of the named tendency", and accumulation_potential is defined as
+ * the complement of dispersion_potential (`1 - dispersion`). So for
+ * `dispersion_potential` a high value is strong ventilation and a deep boundary
+ * layer, which is the favourable end - while the other features are all
+ * "higher = worse". Painting both with one "high = red" rule made
+ * dispersion_potential render red at exactly the moment it was good, and
+ * disagreed with this page's own explanatory copy directly above it.
+ */
+function FeatureBar({
+  label,
+  feature,
+  higherIsBetter = false,
+}: {
+  label: string
+  feature: { value: number | null; available: boolean; basis?: string } | undefined
+  higherIsBetter?: boolean
+}) {
   const value = feature?.value ?? null
   const width = value == null ? 0 : Math.max(4, Math.min(100, value * 100))
-  const color = value == null ? STATUS.muted : value < 0.33 ? STATUS.good : value < 0.66 ? STATUS.warn : STATUS.bad
+  // Band on the unfavourable end so the colour is right for either polarity.
+  // Band on the unfavourable end so the colour is right for either polarity.
+  const severity = value == null ? null : higherIsBetter ? 1 - value : value
+  const color =
+    value == null || severity == null
+      ? STATUS.muted
+      : severity < 0.33
+        ? STATUS.good
+        : severity < 0.66
+          ? STATUS.warn
+          : STATUS.bad
   return (
     <div className="py-1">
       <div className="mb-0.5 flex items-center justify-between text-xs">
@@ -161,7 +192,7 @@ export default function Atmosphere() {
               </p>
               {features ? (
                 <>
-                  <FeatureBar label="Dispersion potential" feature={features.features.dispersion_potential} />
+                  <FeatureBar label="Dispersion potential" feature={features.features.dispersion_potential} higherIsBetter />
                   <FeatureBar label="Accumulation potential" feature={features.features.accumulation_potential} />
                   <FeatureBar label="Inversion trapping potential" feature={features.features.inversion_trapping_potential} />
                   <FeatureBar label="Pollution stagnation index" feature={features.features.pollution_stagnation_index} />

@@ -82,9 +82,16 @@ def advective_shift(
     deg = float(wind_dir or 0.0)
     speed = float(wind_speed or 0.0)
     rad = np.deg2rad(deg)
-    # u (east+, m/s), v (north+, m/s) -> downwind is along +u/+v
-    u = speed * np.sin(rad)
-    v = speed * np.cos(rad)
+    # Meteorological wind direction is the compass bearing the wind blows *from*,
+    # so the transport vector is the negation of that bearing. This matches
+    # ml/preprocessing/weather_processor.py::compute_wind_components, which is the
+    # project's own reference for this conversion.
+    #
+    # Without the negation a 90 deg (east) wind - which travels west - shifted the
+    # pollutant field *east*, i.e. upwind, putting the plume on the wrong side of
+    # every station.
+    u = -speed * np.sin(rad)
+    v = -speed * np.cos(rad)
     # convert m/s to grid cells over a nominal 3h transport window
     hours = 3.0
     dlon_cells = u * 3600 * hours / (GRID_STEP * 100000.0)
@@ -157,8 +164,13 @@ def compute_ncr_grid(
         sj, si = advective_shift(jj, ii, wind_dir, wind_speed)
         shifted = np.full(field.shape, np.nan)
         shifted[_clip_grid_indices(si, lats.size), _clip_grid_indices(sj, lons.size)] = field
-        field = (1 - ADVECTION_WEIGHT) * field + ADVECTION_WEIGHT * shifted
-        field = np.where(np.isnan(field), np.where(np.isnan(shifted), field, shifted), field)
+        # Outside the shifted footprint `shifted` is NaN. That NaN used to
+        # propagate through the blend, punching holes in the map wherever advection
+        # pushed a cell past the domain edge. The fallback keeps the original field
+        # in those cells, so the border degrades to "no advection bias" instead of
+        # disappearing.
+        blended = (1 - ADVECTION_WEIGHT) * field + ADVECTION_WEIGHT * shifted
+        field = np.where(np.isnan(blended), field, blended)
 
     for i in range(lats.size):
         for j in range(lons.size):

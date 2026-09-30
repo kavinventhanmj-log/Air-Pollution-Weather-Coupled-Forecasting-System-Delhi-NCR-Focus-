@@ -53,18 +53,88 @@ class TestIdw:
 
 
 class TestAdvectiveShift:
-    def test_easterly_moves_east(self):
-        jj = np.array([10.0])
-        ii = np.array([10.0])
-        sj, si = advective_shift(jj, ii, wind_dir=90.0, wind_speed=4.0)
-        assert sj[0] > jj[0]
-        assert si[0] == pytest.approx(ii[0])
+    """The transport vector must follow the meteorological from-convention.
 
-    def test_northerly_moves_north_cells(self):
-        jj = np.array([10.0])
-        ii = np.array([10.0])
-        sj, si = advective_shift(jj, ii, wind_dir=0.0, wind_speed=4.0)
-        assert si[0] > ii[0]
+    ``wind_dir`` is the compass bearing the wind blows *from*, so the downwind
+    direction is the negation of it. This is the same conversion the ML pipeline
+    uses in ``ml/preprocessing/weather_processor.py::compute_wind_components``.
+    Dropping the negation advected the pollutant field *upwind*, so a westerly
+    plume was drawn on the eastern side of the domain.
+    """
+
+    # (bearing, from-direction, axis that must change, sign of that change)
+    COMPASS_CASES = [
+        (0.0, "north", "lat", -1.0),    # from N blows south
+        (90.0, "east", "lon", -1.0),    # from E blows west
+        (180.0, "south", "lat", +1.0),  # from S blows north
+        (270.0, "west", "lon", +1.0),   # from W blows east
+    ]
+
+    @pytest.mark.parametrize(("bearing", "name", "axis", "sign"), COMPASS_CASES)
+    def test_downwind_axis_and_sign(self, bearing, name, axis, sign):
+        lon = np.array([0.0, 10.0])
+        lat = np.array([0.0, 10.0])
+        # The function returns (shifted lon index, shifted lat index).
+        shifted_lon, shifted_lat = advective_shift(lon, lat, bearing, 5.0)
+
+        moved, still = (
+            (shifted_lon.mean() - lon.mean(), shifted_lat.mean() - lat.mean())
+            if axis == "lon"
+            else (shifted_lat.mean() - lat.mean(), shifted_lon.mean() - lon.mean())
+        )
+        assert moved * sign > 0, f"wind from {name} should advect {axis} {sign:+.0f}"
+        assert still == pytest.approx(0.0, abs=1e-9), f"wind from {name} must not move the other axis"
+
+    def test_westerly_shifts_eastward(self):
+        """Explicit guard on the sign regression: from-west blows east."""
+        lon = np.array([0.0, 10.0])
+        lat = np.array([0.0, 10.0])
+        shifted_lon, _ = advective_shift(lon, lat, wind_dir=270.0, wind_speed=4.0)
+        assert shifted_lon.mean() > lon.mean()
+
+    def test_easterly_moves_west_cells(self):
+        """Explicit guard: from-east blows west (previously moved east)."""
+        lon = np.array([0.0, 10.0])
+        lat = np.array([0.0, 10.0])
+        shifted_lon, _ = advective_shift(lon, lat, wind_dir=90.0, wind_speed=4.0)
+        assert shifted_lon.mean() < lon.mean()
+        assert shifted_lat_is_unchanged(lat, 90.0, 4.0)
+
+    def test_northerly_moves_south_cells(self):
+        """Explicit guard: from-north blows south (previously moved north)."""
+        lon = np.array([0.0, 10.0])
+        lat = np.array([0.0, 10.0])
+        _, shifted_lat = advective_shift(lon, lat, wind_dir=0.0, wind_speed=4.0)
+        assert shifted_lat.mean() < lat.mean()
+
+    def test_matches_the_ml_pipeline_conversion(self):
+        """`advective_shift` must agree with the project's reference conversion."""
+        from ml.preprocessing.weather_processor import compute_wind_components
+
+        import pandas as pd
+
+        for bearing in (0.0, 90.0, 180.0, 270.0, 315.0):
+            speed = 4.0
+            ref = compute_wind_components(
+                pd.DataFrame({"wind_speed": [speed], "wind_direction": [bearing]})
+            )
+            # Same sign convention: u east+, v north+, both negated for a from-bearing.
+            lon = np.array([0.0, 10.0])
+            lat = np.array([0.0, 10.0])
+            shifted_lon, shifted_lat = advective_shift(lon, lat, bearing, speed)
+            d_lon = (shifted_lon.mean() - lon.mean()) / lon.size
+            d_lat = (shifted_lat.mean() - lat.mean()) / lat.size
+            # The grid applies a per-cell metres->cells conversion; compare the
+            # sign of each axis rather than the scaled magnitude.
+            assert np.sign(d_lon) == np.sign(ref["wind_u"].iloc[0]), bearing
+            assert np.sign(d_lat) == np.sign(ref["wind_v"].iloc[0]), bearing
+
+
+def shifted_lat_is_unchanged(lat, bearing, speed):
+    """True when a purely zonal wind leaves the latitude axis untouched."""
+    lon = np.zeros_like(lat)
+    _, shifted_lat = advective_shift(lon, lat, bearing, speed)
+    return shifted_lat.mean() == pytest.approx(lat.mean(), abs=1e-9)
 
 
 class TestComputeGrid:
@@ -97,3 +167,23 @@ class TestComputeGrid:
         forecasts = {"A": [{"horizon_hours": 24, "aqi_pred": 200}]}
         windy = compute_ncr_grid(stations, forecasts, 24, wind_dir=90.0, wind_speed=6.0)
         assert windy["cells"] != []
+
+    def test_advection_does_not_punch_nan_holes_at_the_border(self):
+        """Cells pushed past the domain edge must fall back, not vanish.
+
+        The shifted field is NaN outside the displaced footprint. Blending that
+        NaN straight into the result removed those cells from the map, so strong
+        winds silently deleted part of the domain.
+        """
+        stations = [_station("A", 28.6, 77.2), _station("B", 28.5, 77.0)]
+        forecasts = {
+            "A": [{"horizon_hours": 24, "aqi_pred": 200}],
+            "B": [{"horizon_hours": 24, "aqi_pred": 180}],
+        }
+        calm = compute_ncr_grid(stations, forecasts, 24)
+        windy = compute_ncr_grid(
+            stations, forecasts, 24, wind_dir=90.0, wind_speed=12.0
+        )
+        # A high wind pushing the field off-domain must not reduce coverage.
+        assert len(windy["cells"]) == len(calm["cells"])
+        assert all(c["aqi"] is not None for c in windy["cells"])

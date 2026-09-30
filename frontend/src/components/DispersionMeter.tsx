@@ -21,14 +21,26 @@ export default function DispersionMeter({ atmosphere }: Props) {
     )
   }
 
-  const norms = [
+  // Dispersion drivers do not share a polarity. Per the backend contract
+  // (atmosphere_service: "higher wind/pbl/ventilation mean more dispersion,
+  // higher inversion/trapping mean more trapping"), a *high* normalised wind,
+  // PBL or ventilation is favourable, while a *high* normalised trapping is not.
+  //
+  // Averaging the four raw values - as this component used to - mixes
+  // favourable and unfavourable drivers into one mean and then inverted it, so
+  // a strong-wind day and a trapped day could score the same. Invert only the
+  // trapping term, average the four dispersion-favourable drivers, and use that
+  // directly rather than subtracting it from 1.
+  const drivers = [
     atmosphere.wind.normalized,
     atmosphere.pbl.normalized,
     atmosphere.ventilation.normalized,
-    atmosphere.trapping.normalized,
+    atmosphere.trapping.normalized == null
+      ? null
+      : 1 - atmosphere.trapping.normalized,
   ].filter((v): v is number => v != null)
-  const handicap = norms.length ? norms.reduce((s, v) => s + v, 0) / norms.length : null
-  const potential = handicap != null ? Math.max(0, Math.min(100, Math.round((1 - handicap) * 100))) : null
+  const meanDriver = drivers.length ? drivers.reduce((s, v) => s + v, 0) / drivers.length : null
+  const potential = meanDriver != null ? Math.max(0, Math.min(100, Math.round(meanDriver * 100))) : null
 
   const tone = potential == null ? 'text-slate-400' : potential >= 65 ? 'text-green-700' : potential >= 40 ? 'text-amber-700' : 'text-red-700'
   const bar = potential == null ? STATUS.muted : potential >= 65 ? STATUS.good : potential >= 40 ? STATUS.warn : STATUS.bad
@@ -89,8 +101,9 @@ export default function DispersionMeter({ atmosphere }: Props) {
       </dl>
 
       <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-        Index = 100 − mean of the normalised wind, PBL, ventilation and trapping constraints. Estimated for operational
-        awareness only; not a regulatory metric.
+        Index = 100 × mean of the normalised wind, PBL and ventilation drivers plus the inverted trapping
+        index, so a strong-wind day scores high and a trapped day low. Estimated for operational awareness only;
+        not a regulatory metric.
       </p>
     </section>
   )

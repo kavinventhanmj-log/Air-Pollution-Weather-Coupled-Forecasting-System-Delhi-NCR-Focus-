@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Activity, AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, Mail } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
-import { isTransientStatus, getDemoCredentials } from '../api/client'
+import { isTransientStatus, getDemoCredentials, resilientGet } from '../api/client'
 import type { DemoCredentials } from '../types'
 
 export default function LoginPage() {
@@ -29,12 +29,21 @@ export default function LoginPage() {
 
   useEffect(() => {
     let cancelled = false
-    getDemoCredentials()
+    // Retry through the cold-start window instead of fetching once.
+    //
+    // A single fire-and-forget request made the demo button's visibility
+    // depend on whether the backend happened to be awake: one transient 502/503
+    // during a Render wake left `demo` null for the rest of the page's life, so
+    // the button never appeared and the demo looked broken. `resilientGet`
+    // waits on the shared warm-up gate and retries, and still lets a genuine
+    // 404 (demo disabled) through immediately, so the credential stays hidden
+    // in production exactly as before.
+    resilientGet(getDemoCredentials)
       .then((res) => {
         if (!cancelled) setDemo(res.data)
       })
       .catch(() => {
-        // 404 (demo disabled) or transient cold-start error: keep the demo
+        // 404 (demo disabled) or a genuinely unavailable backend: keep the demo
         // affordance hidden. Manual sign-in always remains available.
       })
     return () => {
