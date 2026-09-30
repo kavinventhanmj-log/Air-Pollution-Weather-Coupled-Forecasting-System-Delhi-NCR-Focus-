@@ -33,5 +33,9 @@ data/processed/featured_dataset.csv
 # regenerable ML byproducts (available via ml/training/train_pm25.py + build_training_dataset.py)
 models/pm25/training_predictions.csv
 data/ml/
-# Vercel project link (contains projectId/orgId) - never commit
+# Vercel project link (contains projectId/orgId) + its local token file - never commit
 .vercel/
+# Secrets in any local env file, but keep the documented template trackable.
+.env
+.env.*
+!.env.example
