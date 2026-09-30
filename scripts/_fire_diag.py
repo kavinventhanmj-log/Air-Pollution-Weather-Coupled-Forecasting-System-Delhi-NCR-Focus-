@@ -2,6 +2,7 @@
 
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -51,7 +52,9 @@ stats = stations[["station", "latitude", "longitude"]]
 df, _ = align_observations(poll, wx, stats)
 log(f"align rows={len(df)} station_counts={df.groupby('station').size().to_dict()}")
 
-fires["acq_timestamp"] = coerce_utc_naive(fires["acq_date"])
+# FIRMS acquisition times are UTC by definition, so they must not be read as
+# naive IST like the station observations.
+fires["acq_timestamp"] = coerce_utc_naive(fires["acq_date"], assume_tz=UTC)
 fires = fires.dropna(subset=["acq_timestamp", "lat", "lon"]).reset_index(drop=True)
 log(f"fires valid={len(fires)}")
 f_lat = fires["lat"].to_numpy(dtype=float)

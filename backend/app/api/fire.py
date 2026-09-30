@@ -73,9 +73,15 @@ def get_fire_activity(db: Session = Depends(get_db)):
 
 
 def _compute_fire_activity(db: Session) -> FireActivityResponse:
+    # `FireReading.acq_date` is naive UTC (FIRMS acquisition times are UTC, see
+    # firms_service._parse_acq_time). The fallback therefore has to be UTC too:
+    # `datetime.now()` returns the *server's* local time, so the same field would
+    # mean two different things depending on where the process runs.
+    now_utc = datetime.now(UTC).replace(tzinfo=None)
+
     fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(1000).all()
     if not fires:
-        return FireActivityResponse(total_fires=0, high_confidence_fires=0, mean_frp=0.0, region="Delhi NCR", date=datetime.now())
+        return FireActivityResponse(total_fires=0, high_confidence_fires=0, mean_frp=0.0, region="Delhi NCR", date=now_utc)
     high_conf = sum(1 for f in fires if f.confidence and f.confidence.lower() == "high")
     frps = [f.frp for f in fires if f.frp is not None]
     return FireActivityResponse(
@@ -83,7 +89,7 @@ def _compute_fire_activity(db: Session) -> FireActivityResponse:
         high_confidence_fires=high_conf,
         mean_frp=sum(frps) / len(frps) if frps else 0.0,
         region="Punjab/Haryana/Rajasthan",
-        date=fires[0].acq_date if fires else datetime.now(),
+        date=fires[0].acq_date if fires else now_utc,
     )
 
 @router.get("/fire/transport", response_model=TransportDirectionResponse)

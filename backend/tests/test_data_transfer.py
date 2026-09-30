@@ -2,6 +2,8 @@ import csv
 import io
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from app.api.import_ import _parse_timestamp
 from app.models.db_models import PollutionReading, Station, WeatherReading
 
 
@@ -201,3 +203,50 @@ def test_export_import_roundtrip_is_unchanged(client, db_session):
     assert ps["inserted"] == 0
     assert ps["updated"] == 0
     assert ps["unchanged"] >= 12
+
+
+class TestImportTimestampTimezone:
+    """Imported timestamps must land in the app's naive-IST convention.
+
+    The parser used to *strip* any trailing ``Z`` / ``+05:30`` marker instead of
+    applying it, so two spellings of the same instant were stored as two different
+    wall-clock times and every offset-bearing import was shifted by up to 5 h 30 m.
+    """
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["2026-01-01 00:00:00Z", "2026-01-01T00:00:00+00:00", "2026-01-01 00:00:00+0000"],
+    )
+    def test_utc_forms_convert_to_ist(self, raw):
+        assert _parse_timestamp(raw) == datetime(2026, 1, 1, 5, 30, 0)
+
+    def test_the_two_spellings_of_one_instant_agree(self):
+        assert _parse_timestamp("2026-01-01 00:00:00Z") == _parse_timestamp(
+            "2026-01-01 05:30:00+05:30"
+        )
+
+    def test_explicit_ist_offset_is_preserved_as_wall_clock(self):
+        assert _parse_timestamp("2026-01-01 05:30:00+05:30") == datetime(2026, 1, 1, 5, 30, 0)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "2026-01-01 00:00:00",
+            "2026-01-01T00:00:00",
+            "2026-01-01 05:30",
+            "01-01-2026 05:30:00",
+        ],
+    )
+    def test_naive_values_are_already_ist_and_untouched(self, raw):
+        assert _parse_timestamp(raw) == datetime.strptime(
+            "2026-01-01 05:30:00" if raw.endswith(("05:30", "05:30:00")) else "2026-01-01 00:00:00",
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+    def test_result_is_always_naive(self):
+        for raw in ("2026-01-01 00:00:00Z", "2026-01-01 05:30:00+05:30", "2026-01-01 00:00:00"):
+            assert _parse_timestamp(raw).tzinfo is None
+
+    @pytest.mark.parametrize("raw", [None, "", "   ", "NA", "na", "not-a-date"])
+    def test_unparseable_returns_none(self, raw):
+        assert _parse_timestamp(raw) is None

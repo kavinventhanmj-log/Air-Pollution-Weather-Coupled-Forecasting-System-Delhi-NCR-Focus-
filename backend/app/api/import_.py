@@ -15,8 +15,10 @@ consistent with the rest of the backend.
 import csv
 import io
 import logging
-from datetime import datetime
+import re
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -31,6 +33,11 @@ router = APIRouter()
 
 MAX_BODY_BYTES = 5_000_000
 MAX_ERRORS_REPORTED = 20
+
+#: Station observations are stored as naive IST wall-clock throughout the app
+#: (see ``cpcb_service.upsert_ncr_data``), so an imported timestamp carrying an
+#: explicit offset is converted to this zone before the offset is dropped.
+IST = ZoneInfo("Asia/Kolkata")
 
 _TIMESTAMP_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
@@ -62,21 +69,43 @@ def _to_float(value: str | None) -> float | None:
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
-    """Parse a CSV timestamp into a naive wall-clock datetime.
+    """Parse a CSV timestamp into a naive IST wall-clock datetime.
 
-    Any trailing UTC marker (``Z`` / ``+05:30``) is stripped so the stored value
-    matches the app-wide IST naive convention (see ``cpcb_service``).
+    The app-wide storage convention is naive IST wall-clock (see
+    ``cpcb_service.upsert_ncr_data``), so:
+
+    * a value carrying an explicit offset is **converted** to IST before the
+      offset is dropped, and
+    * a naive value is assumed to already be IST wall-clock.
+
+    Simply stripping the marker, as this used to, discarded the offset instead of
+    applying it: ``00:00:00Z`` and ``05:30:00+05:30`` are the same instant, but
+    were stored a day apart in effect (as 00:00 and 05:30 respectively). That
+    silently moved every such import by up to 5 h 30 m.
     """
     if value is None:
         return None
     text = str(value).strip()
     if text == "" or text.upper() == "NA":
         return None
-    for marker in ("Z", "z", "+05:30", "+05:30:00", "+0000", "+00:00"):
-        index = text.find(marker)
-        if index > 0:
-            text = text[:index].strip()
-            break
+
+    # If the value carries a UTC marker or an explicit offset, let the ISO parser
+    # handle it and convert to IST. A trailing "Z" is normalised to "+00:00"
+    # because datetime.fromisoformat on older Pythons rejects the military zone.
+    candidate = text.replace(" ", "T", 1) if " " in text and "T" not in text else text
+    if candidate.endswith(("Z", "z")):
+        candidate = candidate[:-1] + "+00:00"
+    looks_offset = bool(re.search(r"[+-]\d{2}:?\d{2}$", candidate))
+    if looks_offset:
+        try:
+            aware = datetime.fromisoformat(candidate)
+        except ValueError:
+            aware = None
+        if aware is not None:
+            if aware.tzinfo is None:
+                aware = aware.replace(tzinfo=UTC)
+            return aware.astimezone(IST).replace(tzinfo=None)
+
     for fmt in _TIMESTAMP_FORMATS:
         try:
             return datetime.strptime(text, fmt)
