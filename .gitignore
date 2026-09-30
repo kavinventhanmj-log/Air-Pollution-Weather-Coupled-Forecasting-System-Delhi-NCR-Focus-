@@ -39,3 +39,8 @@ data/ml/
 .env
 .env.*
 !.env.example
+# Editor/agent scratch working copies of a source file.
+*.bak
+*.working.bak
+*.orig
+*.rej
