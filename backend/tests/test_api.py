@@ -9,7 +9,7 @@ def test_health(client, db_session):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-    # /health is the rich probe (used by Docker healthchecks)
+    # /health is the rich probe (also round-trips the database)
     response = client.get("/health")
     assert response.status_code == 200
     body = response.json()

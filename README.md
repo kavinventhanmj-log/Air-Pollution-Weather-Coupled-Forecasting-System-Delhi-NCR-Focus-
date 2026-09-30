@@ -10,7 +10,6 @@
 [![Tests](https://img.shields.io/badge/tests-1071%20passed-success)](backend/tests)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-compose%20ready-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Frontend](https://img.shields.io/badge/frontend-Vercel%20%E2%9C%93-success?logo=vercel)](https://air-pollution-weather-coupled-forec-eight.vercel.app)
 [![Backend](https://img.shields.io/badge/backend-status%3A%20live-success?logo=render)](docs/deployment.md)
 
@@ -59,8 +58,7 @@ prediction intervals) and honest (gated real engines, openly-reported skill).
 - [Data & Machine-Learning Pipeline](#data--machine-learning-pipeline)
 - [Database & Migrations](#database--migrations)
 - [Repository Layout](#repository-layout)
-- [Quick Start — Docker](#quick-start--docker)
-- [Quick Start — Bare Metal](#quick-start--bare-metal)
+- [Quick Start — Local Development](#quick-start--local-development)
 - [API Summary](#api-summary)
 - [Frontend Pages](#frontend-pages)
 - [Testing & Quality Gates](#testing--quality-gates)
@@ -225,9 +223,9 @@ directly in SQL to answer "why was there no forecast on Tuesday?".
 | **Backend API** | Python 3.11+ (3.12 in CI), FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0, Alembic |
 | **Frontend** | React 18, TypeScript, Vite 7, Tailwind CSS, Recharts, Leaflet/react-leaflet, react-router-dom, lucide-react, axios |
 | **Machine Learning** | XGBoost, scikit-learn (RandomForest, split-conformal), SHAP, NumPy, Pandas, joblib, custom NumPy GRU |
-| **Data Stores** | PostgreSQL 16 (prod / Docker) · SQLite (dev) |
+| **Data Stores** | PostgreSQL 16 (prod) · SQLite (dev) |
 | **External data** | CPCB (data.gov.in), Open-Meteo (+ pressure levels), NASA FIRMS VIIRS, Copernicus ERA5 (CDS), IMD, NOAA HYSPLIT GDAS, WRF-Chem `wrfout_d01_*.nc` |
-| **Orchestration** | Docker Compose (Postgres · backend · frontend), GitHub Actions CI |
+| **Orchestration** | GitHub Actions CI |
 | **Deployment** | Vercel (frontend SPA) · Render (FastAPI) · Neon (managed PostgreSQL) |
 
 ## Data Sources & Honesty Gates
@@ -332,11 +330,8 @@ PostgreSQL (production) and SQLite (development). Migrations run automatically:
 - **Render** — `preDeployCommand: python backend/scripts/migrate_safely.py` in
   [`render.yaml`](render.yaml), so a release never serves traffic against a stale
   schema.
-- **Docker** — [`backend/scripts/entrypoint.sh`](backend/scripts/entrypoint.sh)
-  migrates, then `exec`s uvicorn (keeping it PID 1 so Docker signals reach it).
-  Set `SKIP_MIGRATIONS=1` to bypass. The entrypoint **refuses to start** if
-  migrations fail, rather than serving confusing 500s.
-- **Local** — `python -m alembic upgrade head`, or let
+- **Local** — `python backend/scripts/migrate_safely.py` (or
+  `python -m alembic upgrade head`), or let
   `backend/app/database.py::apply_migrations()` reconcile a SQLite dev database.
 
 Current head: **`b8d3f1a9c4e2`** — station foreign keys, forecast uniqueness, the
@@ -423,33 +418,33 @@ aerocast-ncr/
 ├── app/main.py                # Render shim: `uvicorn app.main:app` from repo root
 ├── .github/workflows/         # CI (ruff · pytest · Alembic-on-Postgres · tsc/vite)
 ├── render.yaml                # Render blueprint (pre-deploy migrations)
-├── docker-compose.yml         # full-stack compose (db · backend · frontend)
 ├── Makefile                   # developer command centre
 └── pyproject.toml             # packaging + ruff/pytest/cov config
 ```
 
 > The root-level `app/main.py` is a one-line shim that re-exports
 > `backend.app.main:app`, so Render's stock `uvicorn app.main:app` start command
-> works from the repository root. `render.yaml` and the Docker image use the
-> explicit `backend.app.main:app` / `app.main:app` paths instead and do not
+> works from the repository root. `render.yaml` uses the
+> explicit `backend.app.main:app` / `app.main:app` paths instead and does not
 > depend on it. Note that this shim *shadows* `backend/app` if `backend/` is not
 > first on `sys.path` — which is why `alembic/env.py` enforces that ordering
 > explicitly.
 
-## Quick Start — Docker
+## Quick Start — Local Development
 
 ```bash
 # 1. Clone and configure
 git clone https://github.com/methila-2056/Air-Pollution-Weather-Coupled-Forecasting-System-Delhi-NCR-Focus-.git
 cd aerocast-ncr
-cp .env.example .env            # local defaults
-cp docs/deploy.env.example deploy.env   # (optional) production overrides
 
-# 2. Build and start the full stack (Postgres + API + frontend)
-docker compose up -d --build
+# 2. Backend
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+cp .env.example .env                                 # local defaults
+uvicorn app.main:app --host 0.0.0.0 --port 8000      # run from backend/
 
-# 3. The entrypoint applies `alembic upgrade head` before serving;
-#    station seeding and the live-refresh scheduler then run in-app.
+# 3. Frontend (separate terminal)
+cd frontend && npm install && npm run dev            # http://localhost:5173
 
 # 4. Access
 #    Frontend : http://localhost:5173
@@ -459,36 +454,28 @@ docker compose up -d --build
 ```
 
 `/api/health` is a **liveness** probe and answers as soon as the process accepts
-connections. `/health` is a **readiness** probe that round-trips Postgres, so it
-is the right target for a human but the wrong target for a container or platform
-health check — a cold or pooled database will exceed the timeout and trigger a
-restart loop. `docker-compose.yml`, the `Dockerfile` `HEALTHCHECK`, and
-`render.yaml` all deliberately point at `/api/health`.
+connections. `/health` is a **readiness** probe that round-trips the database, so
+it is the right target for a human but the wrong target for a platform health
+check — a cold or pooled connection will exceed the timeout and trigger a restart
+loop. `render.yaml` deliberately points at `/api/health`.
 
-Stop with `docker compose down` (add `-v` to also drop the `pgdata` volume).
-
-## Quick Start — Bare Metal
+With PostgreSQL, run migrations explicitly first:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-cp .env.example .env
-python -m alembic upgrade head                       # create/migrate the schema
-uvicorn app.main:app --host 0.0.0.0 --port 8000      # run from backend/
-
-# Frontend (separate terminal)
-cd frontend && npm install && npm run dev            # http://localhost:5173
+export DATABASE_URL=postgresql://aerocast:pass@localhost:5432/aerocast_ncr
+python backend/scripts/migrate_safely.py
 ```
 
+Otherwise `backend/app/database.py` `apply_migrations()` keeps a SQLite dev
+database in sync with the Alembic chain (including the `uq_weather_station_ts`
+unique index) at startup.
+
 Download data and build the dataset with
-`scripts/fetch_all.{sh,ps1}` or `python scripts/build_dataset.py`. For local
-development against SQLite, `backend/app/database.py` `apply_migrations()`
-keeps the schema in sync with the Alembic chain (including the
-`uq_weather_station_ts` unique index).
+`scripts/fetch_all.{sh,ps1}` or `python scripts/build_dataset.py`.
 
 > **Cloning is slow by design.** `models/` (~1.26 GB) and `data/` are committed
-> so a fresh clone is immediately runnable — model artifacts are joblib
-> binaries that a Docker build cannot regenerate. If clone time becomes a
+> so a fresh clone is immediately runnable — model artifacts are joblib binaries
+> that cannot be regenerated from the repository. If clone time becomes a
 > problem, narrow it with `git clone --filter=blob:none` plus a sparse checkout
 > of `backend/`, `frontend/`, `ml/`, and `docs/`, then fetch `models/` on demand.
 > The ~194 MB SQLite database (`aerocast_ncr.db`) is git-ignored and must be

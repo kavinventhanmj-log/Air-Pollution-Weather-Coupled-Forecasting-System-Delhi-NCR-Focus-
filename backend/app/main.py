@@ -283,16 +283,15 @@ def root():
 def health():
     """Liveness probe returns HTTP 200 with ``{"status": "ok"}``.
 
-    The rich variant (with database connectivity) is served at ``/health``
-    and is used by Docker/Compose healthchecks.
+    The rich variant (with database connectivity) is served at ``/health``.
     """
     return {"status": "ok"}
 
 
 @app.get("/health")
 def health_probe():
-    """Readiness probe also verifies database connectivity so that Docker
-    healthchecks catch database outages.
+    """Readiness probe also verifies database connectivity, so a database outage
+    is reported rather than looking healthy.
     """
     db_status = "connected" if database_reachable() else "disconnected"
     if db_status == "disconnected":

@@ -458,6 +458,15 @@ export interface SummaryResponse {
   }
   data_mode?: string
   data_mode_note?: string
+  /**
+   * Timestamp of the newest pollution observation the summary was built from,
+   * and its age at the moment the summary was generated. The backend averages
+   * each station's most recent stored reading rather than a fixed recency
+   * window, so these two fields are the only way to tell whether the reported
+   * `ncr_avg_aqi` is a live reading or a historical one.
+   */
+  latest_observation_at?: string | null
+  observation_age_hours?: number | null
 }
 
 export interface SystemEngineStatus {

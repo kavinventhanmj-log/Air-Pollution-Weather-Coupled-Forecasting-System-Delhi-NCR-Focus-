@@ -30,6 +30,7 @@ class StationResponse(BaseModel):
     city: str
     state: str | None = None
 
+
 class PollutionReadingResponse(BaseModel):
     station_id: int
     station: str
@@ -45,6 +46,7 @@ class PollutionReadingResponse(BaseModel):
     aqi: int | None
     data_source: str | None = None
 
+
 class PollutionIngestResponse(BaseModel):
     records_fetched: int
     observations_normalized: int
@@ -55,6 +57,7 @@ class PollutionIngestResponse(BaseModel):
     station_created: int
     station_updated: int
     errors: list[str]
+
 
 class StationPollutionCoverage(BaseModel):
     station_id: int
@@ -67,6 +70,7 @@ class StationPollutionCoverage(BaseModel):
     sufficiency: str
     sources: list[str] = Field(default_factory=list)
 
+
 class PollutionCoverageResponse(BaseModel):
     stations_total: int
     stations_with_readings: int
@@ -75,11 +79,13 @@ class PollutionCoverageResponse(BaseModel):
     coverage_pct: float
     stations: list[StationPollutionCoverage]
 
+
 class StationAQISummary(BaseModel):
     name: str
     aqi: int | None
     aqi_category: str
     dominant_pollutant: str | None
+
 
 class SummaryResponse(BaseModel):
     generated_at: datetime
@@ -94,6 +100,18 @@ class SummaryResponse(BaseModel):
     forecast_coverage: dict
     data_mode: str = "static_archive"
     data_mode_note: str = ""
+    # --- Observation provenance (SIH honesty requirement) -------------------
+    # `stations_with_readings` / `ncr_avg_aqi` are computed from each station's
+    # MOST RECENT stored observation, not from a fixed recency window. An
+    # upstream feed that stops publishing would otherwise blank the whole
+    # dashboard while rows that genuinely exist sit unused in the table, and the
+    # UI would have no way to say how old the number it is showing actually is.
+    #
+    # These two fields make the age of the reported AQI explicit so the client
+    # can label it instead of presenting stale data as if it were current.
+    latest_observation_at: datetime | None = None
+    observation_age_hours: float | None = None
+
 
 class CurrentAQI(BaseModel):
     station: str
@@ -130,9 +148,8 @@ class CurrentAQI(BaseModel):
     # deliberately keeps reporting the *normal* 8-hour period and is unchanged.
     # "8h_fallback_unavailable" and "unavailable" are project reporting states,
     # not CPCB-defined outcomes.
-    o3_averaging_basis: Literal[
-        "8h", "1h_fallback", "8h_fallback_unavailable", "unavailable"
-    ] | None = None
+    o3_averaging_basis: Literal["8h", "1h_fallback", "8h_fallback_unavailable", "unavailable"] | None = None
+
 
 class ForecastPoint(BaseModel):
     timestamp: datetime
@@ -149,6 +166,7 @@ class ForecastPoint(BaseModel):
     coupling_stability: float | None = None
     coupling_mode: str | None = None
 
+
 class GridForecastPoint(BaseModel):
     timestamp: datetime
     horizon_hours: int
@@ -157,9 +175,11 @@ class GridForecastPoint(BaseModel):
     lat: float | None = None
     lon: float | None = None
 
+
 class ForecastGenerateRequest(BaseModel):
     station_name: str | None = None
     horizons: list[int] = Field(default_factory=lambda: [1, 6, 12, 24, 48, 72])
+
 
 class ForecastProvenance(BaseModel):
     """Where a forecast's inputs came from, and how much to trust it.
@@ -194,6 +214,7 @@ class ForecastProvenance(BaseModel):
     generated_at: datetime
     note: str | None = None
 
+
 class ForecastGenerateResponse(BaseModel):
     station: str
     generated_at: datetime
@@ -207,6 +228,7 @@ class ForecastGenerateResponse(BaseModel):
     history_days: float | None = None
     provenance: ForecastProvenance | None = None
 
+
 class ForecastComparisonPoint(BaseModel):
     timestamp: datetime
     actual_aqi: int | None
@@ -215,9 +237,11 @@ class ForecastComparisonPoint(BaseModel):
     predicted_pm25: float | None
     delta: float | None
 
+
 class ForecastComparisonResponse(BaseModel):
     station: str
     points: list[ForecastComparisonPoint]
+
 
 class Pm25ForecastPoint(BaseModel):
     timestamp: datetime
@@ -230,6 +254,7 @@ class Pm25ForecastPoint(BaseModel):
     test_rmse: float | None = None
     test_r2: float | None = None
     test_n: int | None = None
+
 
 class Pm25ForecastResponse(BaseModel):
     station: str
@@ -247,6 +272,7 @@ class Pm25ForecastResponse(BaseModel):
     context: dict | None = None
     forecasts: list[Pm25ForecastPoint]
 
+
 class Pm25ModelCardResponse(BaseModel):
     station: str | None = None
     model: str
@@ -259,6 +285,7 @@ class Pm25ModelCardResponse(BaseModel):
     available: bool
     message: str | None = None
 
+
 class ShapContribution(BaseModel):
     feature: str
     value: float | None = None
@@ -266,6 +293,7 @@ class ShapContribution(BaseModel):
     share_of_abs_contributions_pct: float
     direction: str
     description: str
+
 
 class Pm25ForecastExplanationResponse(BaseModel):
     station: str
@@ -286,6 +314,7 @@ class Pm25ForecastExplanationResponse(BaseModel):
     generated_at: datetime
     test_metrics: dict | None = None
 
+
 class ForecastExplanationResponse(Pm25ForecastExplanationResponse):
     """SHAP explanation keyed by a stored ``forecasts`` row id.
 
@@ -293,19 +322,24 @@ class ForecastExplanationResponse(Pm25ForecastExplanationResponse):
     being explained (forecast = base_value + sum of shap values);
     ``stored_pm25_pred`` is the value persisted on the original forecast row.
     """
+
     forecast_id: int
     stored_pm25_pred: float | None = None
 
+
 class PollutionEventFactor(BaseModel):
     """One contributing factor of an event, with real evidence from stored data."""
+
     factor: str
     status: str
     value: float | None = None
     evidence: str | None = None
     description: str | None = None
 
+
 class PollutionEventConfidence(BaseModel):
     """Model-uncertainty-based confidence for an event (from conformal bounds)."""
+
     label: str
     basis: str
     margin_ugm3: float | None = None
@@ -316,6 +350,7 @@ class PollutionEventConfidence(BaseModel):
     coverage_target: float | None = None
     uncertainty_method: str | None = None
 
+
 class PollutionEvent(BaseModel):
     """A detected pollution event (surge / relief / high-risk episode).
 
@@ -324,6 +359,7 @@ class PollutionEvent(BaseModel):
     that predicted extreme vs documented CPCB/NAAQS thresholds; contributing
     factors carry the actual stored values that triggered each classification.
     """
+
     event_type: str
     station: str | None = None
     status: str
@@ -338,8 +374,10 @@ class PollutionEvent(BaseModel):
     confidence: PollutionEventConfidence
     contributing_factors: list[PollutionEventFactor]
 
+
 class PollutionEventsCurrentResponse(BaseModel):
     """Current/upcoming pollution events for one station + methodology."""
+
     station: str
     station_id: int
     generated_at: datetime
@@ -357,6 +395,7 @@ class PollutionEventsCurrentResponse(BaseModel):
     methodology: dict
     notes: list[str] | None = None
 
+
 class WeatherResponse(BaseModel):
     station: str
     timestamp: datetime
@@ -367,6 +406,7 @@ class WeatherResponse(BaseModel):
     wind_direction: float | None
     precipitation: float | None
     cloud_cover: float | None
+
 
 class WeatherDetailResponse(BaseModel):
     station: str
@@ -385,6 +425,7 @@ class WeatherDetailResponse(BaseModel):
     precipitation: float | None
     cloud_cover: float | None
     pbl_height: float | None
+
 
 class InversionResponse(BaseModel):
     station: str
@@ -417,6 +458,7 @@ class InversionResponse(BaseModel):
     inversion_episode_onset: datetime | None = None
     inversion_history_sufficient: bool = False
 
+
 class WindCondition(BaseModel):
     wind_speed_mps: float | None = None
     wind_direction_deg: float | None = None
@@ -427,6 +469,7 @@ class WindCondition(BaseModel):
     provenance: str
     notes: list[str] | None = None
 
+
 class PblCondition(BaseModel):
     pbl_height_m: float | None = None
     category: str
@@ -435,6 +478,7 @@ class PblCondition(BaseModel):
     provenance: str
     notes: list[str] | None = None
 
+
 class VentilationCondition(BaseModel):
     ventilation_coefficient_m2s: float | None = None
     category: str
@@ -442,6 +486,7 @@ class VentilationCondition(BaseModel):
     normalized: float | None = None
     provenance: str
     notes: list[str] | None = None
+
 
 class InversionIndicator(BaseModel):
     detected: bool | None = None
@@ -459,6 +504,7 @@ class InversionIndicator(BaseModel):
     normalized: float | None = None
     limitations: list[str] | None = None
 
+
 class TrappingIndicator(BaseModel):
     score: float | None = None
     category: str
@@ -467,13 +513,16 @@ class TrappingIndicator(BaseModel):
     provenance: str
     factors: list[str] | None = None
 
+
 class NormalizedFeatures(BaseModel):
     """Normalized (0..1) features for later ML use."""
+
     wind: float | None = None
     pbl: float | None = None
     ventilation: float | None = None
     inversion: float | None = None
     trapping: float | None = None
+
 
 class StationAtmosphere(BaseModel):
     station: str
@@ -493,12 +542,14 @@ class StationAtmosphere(BaseModel):
     trapping: TrappingIndicator
     features: NormalizedFeatures
 
+
 class AtmosphereCurrentResponse(BaseModel):
     generated_at: datetime
     region: str
     methodology: dict
     summary: dict
     stations: list[StationAtmosphere]
+
 
 class CouplingDiagnostics(BaseModel):
     aod_est: float
@@ -508,6 +559,7 @@ class CouplingDiagnostics(BaseModel):
     stability_coupling_index: float
     feedback_multiplier: float
     coupling_strength: str
+
 
 class CouplingResponse(BaseModel):
     station: str
@@ -540,6 +592,7 @@ class CouplingFeaturesResponse(BaseModel):
 
 class CouplingStateSnapshot(BaseModel):
     """One persisted coupling snapshot (SIH26082 Phase 30 persistence)."""
+
     station: str
     station_id: int | None = None
     computed_at: datetime | None = None
@@ -610,12 +663,14 @@ class ForecastContextResponse(BaseModel):
     regional_note: str
     horizons: list[ForecastHorizonContext]
 
+
 class FireActivityResponse(BaseModel):
     total_fires: int
     high_confidence_fires: int
     mean_frp: float
     region: str
     date: datetime
+
 
 class FireHotspot(BaseModel):
     lat: float
@@ -624,12 +679,15 @@ class FireHotspot(BaseModel):
     confidence: str | None = None
     acq_date: datetime | None = None
 
+
 class FireHotspotsResponse(BaseModel):
     region: str
     hotspots: list[FireHotspot]
 
+
 class FireEvent(BaseModel):
     """One stored FIRMS fire observation (facts only — no attribution)."""
+
     id: int
     latitude: float
     longitude: float
@@ -641,14 +699,17 @@ class FireEvent(BaseModel):
     instrument: str | None = None
     daynight: str | None = None
 
+
 class FiresLatestResponse(BaseModel):
     region: str
     generated_at: datetime
     count: int
     fires: list[FireEvent]
 
+
 class TransportRiskCurrentResponse(BaseModel):
     """Estimated Regional Pollution Transport Risk — transparent 0-100 estimate."""
+
     risk_score: int | None
     risk_level: str
     main_contributing_factors: list[str]
@@ -663,6 +724,7 @@ class TransportRiskCurrentResponse(BaseModel):
     components: dict
     methodology: dict
     station_detail: list[dict]
+
 
 class PlumeRiskResponse(BaseModel):
     risk_level: str
@@ -680,6 +742,7 @@ class PlumeRiskResponse(BaseModel):
     stubble_impact_score: float | None = None
     estimated_pm25_contribution_ugm3: float | None = None
 
+
 class TransportDirectionResponse(BaseModel):
     station: str
     from_direction: str
@@ -689,12 +752,14 @@ class TransportDirectionResponse(BaseModel):
     wind_direction: float | None
     basis: str
 
+
 class ExplanationResponse(BaseModel):
     station: str
     timestamp: datetime
     prediction: dict
     top_features: list[dict]
     natural_language: list[str]
+
 
 class AlertResponse(BaseModel):
     id: int
@@ -707,6 +772,7 @@ class AlertResponse(BaseModel):
     recommendation: str | None
     created_at: datetime
 
+
 class ModelMetricCreate(BaseModel):
     model_name: str
     pollutant: str
@@ -717,6 +783,7 @@ class ModelMetricCreate(BaseModel):
     mape: float | None = None
     test_period_start: datetime | None = None
     test_period_end: datetime | None = None
+
 
 class ModelMetricResponse(BaseModel):
     id: int | None = None
@@ -731,10 +798,12 @@ class ModelMetricResponse(BaseModel):
     test_period_end: datetime | None
     trained_at: datetime | None = None
 
+
 class SplitRangeInfo(BaseModel):
     start: datetime | None = None
     end: datetime | None = None
     n_rows: int
+
 
 class PerformanceMetrics(BaseModel):
     mae: float | None = None
@@ -744,6 +813,7 @@ class PerformanceMetrics(BaseModel):
     nmae: float | None = None
     n: int = 0
 
+
 class HorizonPerformance(BaseModel):
     horizon_hours: int
     n_train: int
@@ -752,6 +822,7 @@ class HorizonPerformance(BaseModel):
     test_period_start: datetime | None = None
     test_period_end: datetime | None = None
     metrics: dict[str, PerformanceMetrics]
+
 
 class ModelPerformanceResponse(BaseModel):
     schema_version: int = 1

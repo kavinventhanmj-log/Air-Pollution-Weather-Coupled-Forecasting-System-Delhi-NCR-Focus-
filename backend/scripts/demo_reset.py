@@ -1,9 +1,9 @@
 """One-command demo database reset: wipe, re-seed, re-stamp and refresh.
 
-Reproduces the demo from scratch against any DATABASE_URL. For the Docker
-PostgreSQL stack (compose must be running):
+Reproduces the demo from scratch against any DATABASE_URL, e.g. a local
+PostgreSQL instance:
 
-    $env:DATABASE_URL="postgresql://aerocast:aerocast_secret_2024@localhost:5432/aerocast_ncr"
+    $env:DATABASE_URL="postgresql://aerocast:password@localhost:5432/aerocast_ncr"
     python -m backend.scripts.demo_reset
     Remove-Item Env:DATABASE_URL
 
@@ -54,7 +54,7 @@ def main():
     print("Re-stamping newest observations into the last 24h ...")
     bootstrap_recent.main()
 
-    print("\nDemo database is live. Open the app at http://localhost:5173 (Docker)")
+    print("\nDemo database is live. Open the app at http://localhost:5173")
     print("or run `make run-api` + `cd frontend && npm run dev` for a bare-metal build.")
 
 

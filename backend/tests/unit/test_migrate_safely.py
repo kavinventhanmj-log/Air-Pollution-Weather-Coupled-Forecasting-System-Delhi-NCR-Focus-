@@ -1,7 +1,8 @@
 """Regression tests for the guarded migration entrypoint.
 
 ``backend/scripts/migrate_safely.py`` replaces a bare ``alembic upgrade head``
-in ``render.yaml`` and ``entrypoint.sh``. The distinction matters because a
+in ``render.yaml`` (Docker was removed; see ``test_no_docker_deploy_path_remains``).
+The distinction matters because a
 production database created by the old ``Base.metadata.create_all()`` path has
 application tables but **no ``alembic_version`` table**; replaying the chain
 against it fails, while stamping succeeds. These tests pin the three-way
@@ -341,8 +342,8 @@ def test_unreachable_database_fails_without_writing(monkeypatch, capsys):
     assert "could not reach the database" in out
 
 
-def test_render_and_docker_use_the_guarded_script():
-    """The deploy configs must not regress to a bare ``alembic upgrade head``.
+def test_render_uses_the_guarded_script():
+    """The deploy config must not regress to a bare ``alembic upgrade head``.
 
     A bare upgrade against the legacy production database is precisely the
     failure this script was added to prevent, and it is invisible in unit tests
@@ -352,22 +353,56 @@ def test_render_and_docker_use_the_guarded_script():
     assert "preDeployCommand: python backend/scripts/migrate_safely.py" in render
     assert "preDeployCommand: python -m alembic upgrade head" not in render
 
-    entrypoint = (REPO_ROOT / "backend" / "scripts" / "entrypoint.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "backend/scripts/migrate_safely.py" in entrypoint
-    assert "python -m alembic upgrade head" not in entrypoint
 
+def test_no_docker_deploy_path_remains():
+    """Docker was removed; the deploy path is native Python plus Render.
 
-def test_dockerfile_ships_the_script():
-    """The image only copies selected files; the script must be among them.
-
-    ``entrypoint.sh`` invokes ``backend/scripts/migrate_safely.py`` but the
-    Dockerfile copies ``backend/app`` and only ``entrypoint.sh`` from scripts.
-    Without this COPY the container fails to start on migrations.
+    These files were deleted as a set. If one is ever reintroduced it will drag
+    back the unguarded-migration failure mode guarded above, so assert the
+    absence rather than leaving it to code review.
     """
-    dockerfile = (REPO_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
-    assert "backend/scripts/migrate_safely.py" in dockerfile
+    removed = (
+        "docker-compose.yml",
+        "backend/Dockerfile",
+        "frontend/Dockerfile",
+        ".dockerignore",
+        "backend/.dockerignore",
+        "frontend/.dockerignore",
+        "backend/scripts/entrypoint.sh",
+        "frontend/nginx.conf",
+    )
+    leftovers = [p for p in removed if (REPO_ROOT / p).exists()]
+    assert not leftovers, f"unexpected Docker artefacts reintroduced: {leftovers}"
+
+
+def test_docker_references_are_confined_to_history():
+    """No active code or config may still reference the removed Docker path.
+
+    ``CHANGELOG.md`` is exempt: it is a historical record of what the project
+    used to ship, and rewriting it would falsify the record.
+    """
+    offenders: list[str] = []
+    for path in REPO_ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel.startswith(".git/") or rel in {"CHANGELOG.md"}:
+            continue
+        if rel.endswith((".pyc", ".png", ".jpg", ".csv", ".joblib", ".json", ".lock")):
+            continue
+        if any(
+            part
+            in {"node_modules", ".venv", "dist", "__pycache__", ".next", ".pytest_cache"}
+            for part in path.parts
+        ):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "docker" in text.lower() and "Docker was removed" not in text:
+            offenders.append(rel)
+    assert not offenders, f"stale Docker references remain in: {sorted(offenders)}"
 
 
 @pytest.mark.parametrize("revision", ["0964e5b227e3", "b8d3f1a9c4e2"])

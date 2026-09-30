@@ -1,7 +1,11 @@
+import type { ReactNode } from 'react'
+
 interface StatCardProps {
   label: string
   value: string | number | null | undefined
-  sub?: string
+  // Accepts a node so callers can append a styled freshness/as-of suffix to the
+  // caption without losing the base text.
+  sub?: ReactNode
   tone?: 'default' | 'good' | 'warn' | 'bad'
 }
 

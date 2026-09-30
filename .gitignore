@@ -18,7 +18,7 @@ node_modules/
 *.log
 *.db
 
-# frontend build output (produced by npm run build / inside the Docker image)
+    # frontend build output (produced by npm run build)
 frontend/dist/
 frontend/*.tsbuildinfo
 

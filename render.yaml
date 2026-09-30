@@ -29,16 +29,16 @@
 #
 # NOTE: The repo-root working directory is intentional. Uvicorn starts as
 # `backend.app.main:app` so that `ml/`, `models/`, `data/` and `alembic.ini`
-# resolve from the repository root (models/joblib files are not baked into a
-# Docker image; they ship inside the git checkout).
+# resolve from the repository root (the model joblib files are large and live in
+# the git checkout, not in a separately installed package).
 
 services:
   - type: web
     name: aerocast-backend
     runtime: python
     plan: free
-    # 3.12 matches .github/workflows/ci.yml, the Dockerfile and local
-    # development. It was pinned to 3.11.9, so the deployed interpreter was the
+    # 3.12 matches .github/workflows/ci.yml and local development. It was
+    # pinned to 3.11.9, so the deployed interpreter was the
     # one version combination nothing was ever tested against; pandas/numpy
     # resolution differed from CI and a green run proved nothing about the
     # service that actually served traffic.

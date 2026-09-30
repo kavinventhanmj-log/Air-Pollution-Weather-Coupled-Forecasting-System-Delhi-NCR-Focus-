@@ -119,8 +119,9 @@ which upstream is live, archived, or gated — judges can interrogate the truth.
 
 ## 7. Sustainability & scale
 
-- **Hand-off ready**: single `docker-compose` backend, Alembic-style migrations,
-  idempotent import (station,timestamp keyed), CLI importers for CPCB/FIRMS CSV.
+- **Hand-off ready**: single FastAPI backend, Alembic migrations via the guarded
+  `migrate_safely.py` entrypoint, idempotent import (station,timestamp keyed),
+  CLI importers for CPCB/FIRMS CSV.
 - **Scale**: swap Normalised DB tier; enable `LIVE_REFRESH_ENABLED=true` to make
   refresh a scheduler; drop WRF-Chem `wrfout_d01_*.nc` into `WRF_OUTPUT_DIR` to
   absorb a real CTM surface without code changes.

@@ -62,12 +62,14 @@ npm run dev      # dev server on :5173 (proxies /api → :8000)
 npm run build    # type-check + production bundle
 ```
 
-## End-to-end (Docker)
+## End-to-end
+
+Run the backend and frontend as two processes (Docker was removed; see
+`docs/deployment.md`):
 
 ```bash
-docker compose up --build
-# backend   http://localhost:8000/docs
-# frontend  http://localhost:5173
+cd backend && uvicorn app.main:app --port 8000   # backend   http://localhost:8000/docs
+cd frontend && npm run dev                       # frontend  http://localhost:5173
 ```
 `ml/`, `models/` and `data/` are mounted read-only into the backend container,
 so rebuilt/retrained artifacts are picked up without rebuilding the image.

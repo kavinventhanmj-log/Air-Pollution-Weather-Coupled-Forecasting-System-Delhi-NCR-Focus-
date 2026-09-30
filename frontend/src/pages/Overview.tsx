@@ -13,6 +13,7 @@ import EmptyState from '../components/EmptyState'
 import { useIntervalRefresh } from '../hooks/useIntervalRefresh'
 import { CHART } from '../lib/theme'
 import { aqiCategory } from '../lib/aqi'
+import { formatAge, isStale, modeChip, modeLabel } from '../lib/freshness'
 import type { Station, PollutionReading, ForecastPoint, WeatherData, InversionData, FireActivity, PlumeRisk, Explanation, CouplingData, SummaryResponse } from '../types'
 
 export default function Overview() {
@@ -36,6 +37,13 @@ export default function Overview() {
       .then(res => setStations(res.data))
       .catch(() => setStations([]))
   }, [])
+
+  // Provenance of the summary numbers, derived once so the cards, the banner
+  // and the status chip can never disagree about whether the data is current.
+  const summaryAgeHours = summary?.observation_age_hours ?? null
+  const ageLabel = formatAge(summaryAgeHours)
+  const stale = isStale(summaryAgeHours)
+  const mode = summary?.data_mode
 
   const refreshAll = (): Promise<void> => {
     setError(null)
@@ -102,12 +110,51 @@ export default function Overview() {
         }
       />
 
+      {/* When the upstream feed stops publishing, the AQI figures below are the
+          newest readings on record rather than current conditions. Without this
+          banner a months-old average is indistinguishable from a live one. */}
+      {summary && mode === 'stale' && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <div>
+            <p className="font-semibold">Upstream air-quality feed is not publishing</p>
+            <p className="mt-0.5 text-amber-800">
+              {summary.data_mode_note
+                ?? `The newest station observation is ${ageLabel ?? 'of unknown age'}.`}
+            </p>
+          </div>
+          <span
+            className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold ${modeChip(mode)}`}
+            title={summary.latest_observation_at ?? undefined}
+          >
+            {modeLabel(mode)}
+          </span>
+        </div>
+      )}
+
       {summary && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatCard
             label="NCR Average AQI"
             value={summary.ncr_avg_aqi?.toFixed(0) ?? '--'}
-            sub={`${summary.stations_with_readings} / ${summary.stations} stations reporting`}
+            sub={
+              <>
+                {`${summary.stations_with_readings} / ${summary.stations} stations reporting`}
+                {/* The average is built from each station's newest stored reading,
+                    which may be old when the upstream feed stops publishing. Say
+                    how old, so a historical number is never read as current. */}
+                {ageLabel && (
+                  <>
+                    {' · '}
+                    <span className={stale ? 'font-medium text-amber-700' : undefined}>
+                      as of {ageLabel}
+                    </span>
+                  </>
+                )}
+              </>
+            }
             tone={summary.ncr_avg_aqi != null ? (summary.ncr_avg_aqi <= 100 ? 'good' : summary.ncr_avg_aqi >= 200 ? 'bad' : 'warn') : 'default'}
           />
           <div className="card">

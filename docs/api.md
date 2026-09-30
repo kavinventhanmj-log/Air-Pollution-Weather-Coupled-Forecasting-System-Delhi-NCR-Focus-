@@ -1,7 +1,7 @@
 # API Reference
 
 Base URL (dev): `http://localhost:8000/api`
-Base URL (docker): `http://localhost:8000/api` (nginx proxies `/api` → backend)
+The Vite dev server proxies `/api` to the backend on port 8000.
 
 All endpoints return JSON. Errors use FastAPI's standard `{"detail": ...}` shape.
 

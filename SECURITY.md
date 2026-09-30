@@ -24,8 +24,7 @@ release.
 - **Never commit credentials.** Repository `.env` files are git-ignored and
   contain only placeholders. Copy `.env.example` or `docs/deploy.env.example`
   and set real values per host.
-- Rotate any credential exposed historically (e.g. the development-only
-  Postgres password in `docker-compose.yml`) before production use.
+- Rotate any credential exposed historically before production use.
 - Production deployments should terminate TLS at a reverse proxy and restrict
   `CORS_ORIGINS` to the real origin.
 - API keys for live data sources (NASA FIRMS, Copernicus CDS) should be supplied

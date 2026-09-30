@@ -2,9 +2,6 @@
 
 Usage:
     python -m backend.scripts.refresh_live [--once]
-
-Also usable in docker-compose as a sidecar:
-    docker compose run --rm backend python -m backend.scripts.refresh_live
 """
 
 import argparse

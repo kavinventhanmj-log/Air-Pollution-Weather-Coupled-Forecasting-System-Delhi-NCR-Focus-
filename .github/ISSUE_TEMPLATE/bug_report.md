@@ -19,7 +19,7 @@ Steps to reproduce the behaviour:
 What you expected to happen.
 
 **Environment**
-- Deploy mode: Docker Compose / bare metal
+- Deploy mode: Render / local development
 - Database: PostgreSQL / SQLite
 - Backend Python version: 3.x
 - Frontend Node version / browser
