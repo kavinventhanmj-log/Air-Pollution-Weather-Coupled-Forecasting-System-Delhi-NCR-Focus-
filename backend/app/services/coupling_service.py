@@ -2,22 +2,31 @@
 
 Bridge between the database and :mod:`ml.features.coupling_engine`. It reads
 the latest stored CPCB pollution, Open-Meteo weather (+ stored vertical
-pressure-level temperatures) and NASA FIRMS fire observations for a station /
-region, then runs the deterministic coupling-engine feature computation.
+pressure-level temperatures), an Open-Meteo *forecast* for the 72h look-ahead
+and NASA FIRMS fire observations for a station / region, then runs the
+deterministic coupling-engine feature computation.
 
-Nothing here fabricates values: when a stored field is missing the
-corresponding input is ``None`` and the engine reports the feature as
-unavailable with an explicit basis string.
+Nothing here fabricates values: when a field is missing the corresponding input
+is ``None`` and the engine reports the feature as unavailable with an explicit
+basis string. Future weather comes from the live forecast provider (kept
+in-memory, never written to ``weather_observations``); stored observations are
+used as the fallback when the provider is unavailable.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from ml.features.atmospheric_profile import combine_inversion
 from ml.features.coupling_engine import CouplingInputs, compute_coupling_features
 from ml.features.fire_impact import DEFAULT_MAX_DISTANCE_KM, compute_fire_impact
+
+from .refresh_service import fetch_forecast_hours
+
+logger = logging.getLogger("aerocast.coupling")
 
 
 def _float(v) -> float | None:
@@ -331,14 +340,69 @@ def _utc_naive(value: datetime) -> datetime:
 _FORECAST_WINDOW_HOURS = 72
 
 
+def _weather_rows_from_forecast_df(df) -> list[Any]:
+    """Project an Open-Meteo forecast frame into ``WeatherReading``-shaped rows.
+
+    Kept as plain in-memory objects (never written to ``weather_observations``)
+    so the existing nearest-match and inversion helpers reuse the attribute
+    names/units a stored ``WeatherReading`` exposes while the data provably
+    remains detached from the historical table.
+    """
+    rows = []
+    for _, r in df.iterrows():
+        rows.append(
+            SimpleNamespace(
+                timestamp=r["time"].to_pydatetime(),
+                temperature=_float(r.get("temperature_2m")),
+                humidity=_float(r.get("relative_humidity_2m")),
+                pressure_msl=_float(r.get("pressure_msl")),
+                surface_pressure=_float(r.get("surface_pressure")),
+                wind_speed=_float(r.get("wind_speed_10m")),
+                wind_direction=_float(r.get("wind_direction_10m")),
+                precipitation=_float(r.get("precipitation")),
+                cloud_cover=_float(r.get("cloud_cover")),
+                pbl_height=_float(r.get("boundary_layer_height")),
+                temperature_1000hPa=_float(r.get("temperature_1000hPa")),
+                temperature_925hPa=_float(r.get("temperature_925hPa")),
+                temperature_850hPa=_float(r.get("temperature_850hPa")),
+                temperature_700hPa=_float(r.get("temperature_700hPa")),
+            )
+        )
+    return rows
+
+
+def _load_future_weather_rows(lat: float | None, lon: float | None) -> list[Any]:
+    """Best-effort Open-Meteo *forecast* for the 72h look-ahead (fetched once).
+
+    One provider request per context build — never per horizon — and only when
+    the build actually runs (the route wraps it in a 300s TTL cache). Returns
+    ``[]`` on any provider failure so the caller falls back to stored
+    observations.
+    """
+    if lat is None or lon is None:
+        return []
+    try:
+        df = fetch_forecast_hours(lat, lon)
+    except Exception as exc:  # noqa: BLE001 - provider outage must not break /context
+        logger.warning("weather forecast fetch failed (%s) — using stored observations", exc)
+        return []
+    if df is None or df.empty or "time" not in df.columns:
+        return []
+    return _weather_rows_from_forecast_df(df)
+
+
 def get_forecast_context(db, station) -> dict[str, Any]:
     """Per-horizon atmospheric + coupling context for the station's 72h window.
 
-    For each forecast horizon (1..72 h) the nearest stored ``WeatherReading``
-    (within +/- 2h of the target timestamp) supplies the atmospheric state and
-    a photochemical/inversion estimate; regional fire impact and observed
-    pollution are shared across horizons (they are region-wide, not per-hour).
-    Missing rows produce ``None`` fields — the UI renders them as unavailable.
+    For each forecast horizon (1..72 h) the nearest weather row for the target
+    timestamp supplies the atmospheric state and a photochemical/inversion
+    estimate; regional fire impact and observed pollution are shared across
+    horizons (they are region-wide, not per-hour).
+
+    Weather source: live Open-Meteo *forecast* hours (fetched once, aligned to
+    each ``target = now + h``); the stored ``weather_observations`` archive is
+    only the fallback when the provider is unavailable. Missing rows produce
+    ``None`` fields — the UI renders them as unavailable.
     """
     from ..models.db_models import PollutionReading, WeatherReading
 
@@ -368,13 +432,19 @@ def get_forecast_context(db, station) -> dict[str, Any]:
     wind_speed = _float(getattr(latest_wx, "wind_speed", None)) if latest_wx is not None else None
     fire = _fire_impact_from_rows(fires, lat, lon, wind_dir, wind_speed)
 
-    # All weather rows for the station (to find nearest-per-horizon efficiently).
-    wx_rows = (
+    # Stored observations remain the fallback; the live Open-Meteo *forecast*
+    # (fetched once as in-memory rows) supplies real future weather for the full
+    # 72h look-ahead, so atmospheric context is not left null just because the
+    # archive currently stops around today. Only one source feeds the matcher, so
+    # forecast rows are never treated as (or merged into) historical observations.
+    stored_wx_rows = (
         db.query(WeatherReading)
         .filter(WeatherReading.station_id == station.id)
         .order_by(WeatherReading.timestamp.asc())
         .all()
     )
+    future_wx_rows = _load_future_weather_rows(lat, lon)
+    wx_rows = future_wx_rows if future_wx_rows else stored_wx_rows
 
     contexts: list[dict[str, Any]] = []
     for h in range(1, _FORECAST_WINDOW_HOURS + 1):
@@ -445,28 +515,40 @@ def get_forecast_context(db, station) -> dict[str, Any]:
         },
         "regional_note": (
             "Fire-influence and observed-pollution terms are regional and reuse the "
-            "latest stored observations across all horizons; only atmospheric fields "
-            "vary per horizon via nearest stored weather rows."
+            "latest stored observations across all horizons. Atmospheric fields vary "
+            "per horizon: live Open-Meteo forecast hours are matched to each target "
+            "timestamp (stored observations are the fallback when the provider is "
+            "unavailable)."
         ),
         "horizons": contexts,
     }
 
 
 def _nearest_weather_row(rows, target, tolerance: timedelta, within_max_hours: int = 6):
-    """Nearest stored weather row to *target* time (worst case +/- 6h).
+    """Nearest weather row to *target* time, within *tolerance*.
 
-    ``rows`` come from the DB and may carry naive (SQLite) or tz-aware
-    (PostgreSQL) timestamps; ``target`` is naive-UTC. Both are normalised to
-    naive-UTC before ``abs(a - b)`` so the subtraction never raises.
+    A row qualifies only when it satisfies **both** bounds, so the check rejects
+    on ``or`` rather than ``and``: the old ``and`` skipped a row only when it
+    exceeded *both*, which meant any row inside the 6h ceiling was accepted no
+    matter how far it sat from the target, and the 2h ``tolerance`` was never
+    actually enforced. With the fix the effective window is
+    ``min(tolerance, within_max_hours)`` — hourly forecast/observation steps
+    match within the 2h the context builder asks for, and a gap in the source
+    yields ``None`` instead of a stale row pulled in from hours away.
+
+    ``rows`` come from the DB (naive SQLite / tz-aware PostgreSQL timestamps) or
+    from the in-memory forecast projection; ``target`` is naive-UTC. All are
+    normalised to naive-UTC before ``abs(a - b)`` so the subtraction never raises.
     """
     best = None
     best_delta = None
+    max_delta = min(tolerance, timedelta(hours=within_max_hours))
     for r in rows:
         ts = _utc_naive(r.timestamp)
         if ts is None:
             continue
         d = abs(ts - target)
-        if d > timedelta(hours=within_max_hours) and d > tolerance:
+        if d > max_delta:
             continue
         if best_delta is None or d < best_delta:
             best = r

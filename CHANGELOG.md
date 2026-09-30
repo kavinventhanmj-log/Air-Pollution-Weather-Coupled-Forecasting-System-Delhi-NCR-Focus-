@@ -3,6 +3,31 @@
 All notable changes to **AeroCast-NCR** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
+## [1.23.0] - 2026-09-29
+
+### Fixed
+
+- **The 72-hour atmospheric-context forecast is no longer cut off at ~today.**
+  The `/api/forecast/{station}/context` builder read weather only from the stored
+  `weather_observations` archive, which stops around today's 23:00 UTC, so every
+  horizon past that window (once measured at h24..h72) reported `null`
+  temperature, humidity, pressure, wind and PBL — and with them the nulled
+  dispersion/accumulation/stagnation terms. The builder now fetches an Open-Meteo
+  *forecast* once per context build (5 forecast days; in-memory only, never
+  written to the observations table) and aligns each horizon target `now + h` to
+  the nearest forecast hour through h72. Stored observations remain the fallback
+  when the provider is unavailable, and the PM2.5 pollutant forecast is
+  untouched. Missing forecast hours are still reported as `null` rather than
+  extrapolated.
+- **The nearest-weather match no longer ignores its own tolerance.**
+  `_nearest_weather_row` rejected a candidate with `d > within_max_hours and
+  d > tolerance`, so a row only had to breach *both* bounds to be dropped: any
+  row inside the ±6 h ceiling was accepted no matter how far it sat from the
+  horizon target, and the ±2 h tolerance the context builder passes was never
+  actually enforced. The check is now `or` (equivalently
+  `min(tolerance, within_max_hours)`), so a gap in the weather source yields
+  `null` instead of a stale row pulled in from hours away.
+
 ## [1.22.0] - 2026-09-29
 
 ### Fixed

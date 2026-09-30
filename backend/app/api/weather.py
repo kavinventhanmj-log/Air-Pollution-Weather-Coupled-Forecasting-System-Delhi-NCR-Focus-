@@ -7,11 +7,16 @@ from ..schemas.schemas import WeatherDetailResponse
 
 router = APIRouter()
 
+
 def _station_or_404(db: Session, station_name: str) -> Station:
     station = db.query(Station).filter(Station.name == station_name).first()
     if not station:
-        raise HTTPException(status_code=404, detail=f"Station '{station_name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Station '{station_name}' not found",
+        )
     return station
+
 
 def _to_detail(station: Station, r) -> WeatherDetailResponse:
     return WeatherDetailResponse(
@@ -33,52 +38,70 @@ def _to_detail(station: Station, r) -> WeatherDetailResponse:
         pbl_height=r.pbl_height,
     )
 
+
 @router.get("/weather/latest", response_model=list[WeatherDetailResponse])
 def get_weather_latest(db: Session = Depends(get_db)):
-    """Latest weather observation for every station in Delhi NCR.
+    """Latest weather observation for every station in Delhi NCR."""
+    from sqlalchemy import func
 
-    Serves a single NCR-wide snapshot: the most recent ``weather_observations``
-    row per station, newest observed time first. Stations without any weather
-    data simply do not appear in the result.
-    """
-    stations = {s.id: s for s in db.query(Station).all()}
-    readings = (
-        db.query(WeatherReading)
-        .order_by(WeatherReading.station_id, WeatherReading.timestamp.desc())
+    latest_timestamp = (
+        db.query(
+            WeatherReading.station_id.label("station_id"),
+            func.max(WeatherReading.timestamp).label("latest_timestamp"),
+        )
+        .group_by(WeatherReading.station_id)
+        .subquery()
+    )
+
+    rows = (
+        db.query(Station, WeatherReading)
+        .join(
+            latest_timestamp,
+            Station.id == latest_timestamp.c.station_id,
+        )
+        .join(
+            WeatherReading,
+            (WeatherReading.station_id == latest_timestamp.c.station_id)
+            & (WeatherReading.timestamp == latest_timestamp.c.latest_timestamp),
+        )
+        .order_by(WeatherReading.timestamp.desc(), Station.id)
         .all()
     )
-    seen: set[int] = set()
-    latest = []
-    for reading in readings:
-        if reading.station_id in seen:
-            continue
-        seen.add(reading.station_id)
-        station = stations.get(reading.station_id)
-        if station is None:
-            continue
-        latest.append(_to_detail(station, reading))
-    return latest
+
+    return [_to_detail(station, reading) for station, reading in rows]
+
 
 @router.get("/weather/{station_name}", response_model=WeatherDetailResponse)
 def get_weather(station_name: str, db: Session = Depends(get_db)):
     station = _station_or_404(db, station_name)
+
     reading = (
         db.query(WeatherReading)
         .filter(WeatherReading.station_id == station.id)
         .order_by(WeatherReading.timestamp.desc())
         .first()
     )
+
     if not reading:
-        raise HTTPException(status_code=404, detail=f"No weather data for station '{station_name}'")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No weather data for station '{station_name}'",
+        )
+
     return _to_detail(station, reading)
 
-@router.get("/weather/{station_name}/history", response_model=list[WeatherDetailResponse])
+
+@router.get(
+    "/weather/{station_name}/history",
+    response_model=list[WeatherDetailResponse],
+)
 def get_weather_history(
     station_name: str,
     hours: int = Query(default=24, ge=1, le=720),
     db: Session = Depends(get_db),
 ):
     station = _station_or_404(db, station_name)
+
     readings = (
         db.query(WeatherReading)
         .filter(WeatherReading.station_id == station.id)
@@ -86,6 +109,11 @@ def get_weather_history(
         .limit(hours)
         .all()
     )
+
     if not readings:
-        raise HTTPException(status_code=404, detail=f"No historical weather for station '{station_name}'")
-    return [_to_detail(station, r) for r in readings]
+        raise HTTPException(
+            status_code=404,
+            detail=f"No historical weather for station '{station_name}'",
+        )
+
+    return [_to_detail(station, reading) for reading in readings]

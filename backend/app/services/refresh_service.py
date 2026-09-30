@@ -21,6 +21,7 @@ from .firms_service import (
     resolve_api_key,
     upsert_fire_records,
 )
+from .ttl_cache import _running_under_pytest
 
 logger = logging.getLogger("aerocast.refresh")
 
@@ -97,6 +98,12 @@ PRESSURE_LEVEL_VARS = (
 
 DEFAULT_LOOKBACK_DAYS = 3
 HTTP_TIMEOUT = 60
+
+# A 5-day forecast starts at 00:00 of the current day and always extends past
+# ``now + 72h``, the horizon the atmospheric-context builder needs. No
+# ``past_days`` is requested: the frame is deliberately a *future* forecast, so
+# it can never be mistaken for a stored observation.
+FORECAST_COVERAGE_DAYS = 5
 
 
 def _to_float(v):
@@ -200,6 +207,40 @@ def _get_weather_df(station_name: str, lat: float, lon: float, start: str, end: 
     df["station"] = raw_to_display.get(station_name, station_name.replace("_", " "))
     df["latitude"] = lat
     df["longitude"] = lon
+    return df
+
+
+def fetch_forecast_hours(lat: float, lon: float) -> pd.DataFrame:
+    """Fetch a multi-day Open-Meteo *forecast* window for a station.
+
+    Returns hourly rows (naive-UTC ``time``) in the same shape ``_get_weather_df``
+    produces (surface variables + pressure-level temperatures), so callers can
+    feed the rows through the same normalisation / nearest-match helpers. With
+    ``forecast_days=FORECAST_COVERAGE_DAYS`` the frame always covers
+    ``now + 72h``, which is the look-ahead the atmospheric-context builder needs.
+
+    Returns an empty frame when the provider returns no hourly data, and raises
+    on transport / HTTP errors so the caller chooses its own fallback. Nothing
+    here writes to the database.
+    """
+    # Keep the suite hermetic: under pytest the forecast is supplied by a mock
+    # (see tests/unit/test_coupling_context_forecast.py).
+    if _running_under_pytest():
+        return pd.DataFrame()
+    params: dict[str, Any] = {
+        "latitude": lat,
+        "longitude": lon,
+        "forecast_days": FORECAST_COVERAGE_DAYS,
+        "hourly": f"{HOURLY_VARS},{PRESSURE_LEVEL_VARS}",
+        "timezone": "UTC",
+    }
+    resp = requests.get(FORECAST_URL, params=params, timeout=HTTP_TIMEOUT)
+    resp.raise_for_status()
+    hourly = resp.json().get("hourly", {})
+    if not hourly or "time" not in hourly:
+        return pd.DataFrame()
+    df = pd.DataFrame(hourly)
+    df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_localize(None)
     return df
 
 
