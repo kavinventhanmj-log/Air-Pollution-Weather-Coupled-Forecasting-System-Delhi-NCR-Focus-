@@ -109,9 +109,9 @@ class TestAdvectiveShift:
 
     def test_matches_the_ml_pipeline_conversion(self):
         """`advective_shift` must agree with the project's reference conversion."""
-        from ml.preprocessing.weather_processor import compute_wind_components
-
         import pandas as pd
+
+        from ml.preprocessing.weather_processor import compute_wind_components
 
         for bearing in (0.0, 90.0, 180.0, 270.0, 315.0):
             speed = 4.0

@@ -121,6 +121,27 @@ def _latest_weather(db: Session) -> dict:
     }
 
 
+def _wx_payload(wx: dict) -> dict:
+    """Serialise the driving meteorology together with its provenance flags.
+
+    ``_aggregate_weather`` computes ``wind_observed`` / ``pbl_observed`` /
+    ``synthetic_meteorology`` precisely so a placeholder can be told apart from a
+    measurement, but those keys were dropped when the response dicts were built:
+    the API returned only the four numeric fields, so a client could not tell a
+    synthesised 4 m/s wind from an observed one. Both response paths build their
+    ``wx`` block through this helper so the flags cannot be forgotten again.
+    """
+    return {
+        "wind_speed": round(wx["wind_speed"], 2),
+        "wind_direction": round(wx["wind_direction"], 1),
+        "pbl_height": round(wx["pbl_height"], 1),
+        "precipitation": round(wx["precipitation"], 2),
+        "wind_observed": bool(wx.get("wind_observed", False)),
+        "pbl_observed": bool(wx.get("pbl_observed", False)),
+        "synthetic_meteorology": bool(wx.get("synthetic_meteorology", False)),
+    }
+
+
 def _initial_aqi_field(db: Session, horizon_hours: int) -> np.ndarray | None:
     """IDW-interpolate the latest horizon station forecasts into a grid field."""
     lats, lons = build_grid()
@@ -278,8 +299,7 @@ def run_dispersion_forecast_service(
             "start_hour": start_hour,
             "domain": NCR_BOUNDS,
             "step_deg": GRID_STEP,
-            "wx": {"wind_speed": round(wx["wind_speed"], 2), "wind_direction": round(wx["wind_direction"], 1),
-                   "pbl_height": round(wx["pbl_height"], 1), "precipitation": round(wx["precipitation"], 2)},
+            "wx": _wx_payload(wx),
             "fire_count": len(fires),
             "fires": fires[:20],
             "composite": blend_note,
@@ -350,8 +370,7 @@ def run_dispersion_forecast_service(
         "start_hour": start_hour,
         "domain": NCR_BOUNDS,
         "step_deg": GRID_STEP,
-        "wx": {"wind_speed": round(wx["wind_speed"], 2), "wind_direction": round(wx["wind_direction"], 1),
-               "pbl_height": round(wx["pbl_height"], 1), "precipitation": round(wx["precipitation"], 2)},
+        "wx": _wx_payload(wx),
         "fire_count": len(fires),
         "fires": fires[:20],
         "dt_used": round(result["dt_used"], 1),

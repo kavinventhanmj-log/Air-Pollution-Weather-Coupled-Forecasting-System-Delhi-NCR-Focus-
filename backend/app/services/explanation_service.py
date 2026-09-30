@@ -187,8 +187,25 @@ def generate_natural_language(features: dict, top_features: list[dict], predicti
         for key in ("pm25_pred", "pm10_pred", "o3_pred", "no2_pred"):
             if prediction.get(key) is not None:
                 pts.append(f"{key[:-5].upper()} {prediction[key]:g}")
-        lines.append(
-            f"Forecast concentrations: {', '.join(pts)} with AQI {prediction.get('aqi_pred')} "
-            f"({prediction.get('aqi_category')}), dominated by {prediction.get('dominant_pollutant')}."
-        )
+        if pts:
+            # Only cite the AQI fields when the caller actually supplied them.
+            #
+            # `api/explanation.py` passes only `{"pm25_pred": ...}`, because the
+            # AQI there is a PM2.5-only sub-index and the remaining sub-indices are
+            # deliberately left absent. Unguarded `.get()` calls rendered the
+            # literal text "None" for AQI, category and dominant pollutant, which
+            # reached the AI Explanation page as
+            # "with AQI None (None), dominated by None."
+            aqi = prediction.get("aqi_pred")
+            if aqi is None:
+                lines.append(f"Forecast concentrations: {', '.join(pts)}.")
+            else:
+                category = prediction.get("aqi_category")
+                dominant = prediction.get("dominant_pollutant")
+                category_text = f" ({category})" if category else ""
+                dominant_text = f", dominated by {dominant}." if dominant else "."
+                lines.append(
+                    f"Forecast concentrations: {', '.join(pts)} with AQI {aqi:g}"
+                    f"{category_text}{dominant_text}"
+                )
     return lines

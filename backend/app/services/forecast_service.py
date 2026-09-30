@@ -285,6 +285,38 @@ def _feature(features: dict, key: str, default: float | None = None):
     return number
 
 
+#: Meteorological inputs the analytic fallbacks below substitute with a plausible
+#: constant when the builder did not supply them. Tracked so the provenance of a
+#: heuristic prediction can state which numbers were invented rather than measured.
+_FALLBACK_INPUT_KEYS = (
+    "wind_speed",
+    "pbl_height",
+    "temperature",
+    "pm25_lag1",
+    "pm10_lag1",
+    "so2_lag1",
+    "co_lag1",
+    "fire_impact_score",
+    "precipitation",
+)
+
+
+def missing_fallback_inputs(features: dict) -> list[str]:
+    """Feature keys the analytic fallback would have to invent for ``features``.
+
+    Returns the subset of ``_FALLBACK_INPUT_KEYS`` that is absent, None or NaN,
+    i.e. exactly the inputs that would silently become the hard-coded constants in
+    ``_fallback_*``. Used to label a heuristic prediction's provenance.
+    """
+    if not isinstance(features, dict):
+        return list(_FALLBACK_INPUT_KEYS)
+    missing: list[str] = []
+    for key in _FALLBACK_INPUT_KEYS:
+        if _feature(features, key, None) is None:
+            missing.append(key)
+    return missing
+
+
 def _fallback_pm25(features: dict, h: int) -> float:
     base = _feature(features, "pm25_lag1", 50.0)
     decay = max(0.55, 1.0 - 0.006 * h)
@@ -395,24 +427,37 @@ def predict_pollutants(features: dict, horizons=None) -> list[dict]:
         so2_model = load_pollutant_model("so2", h)
         co_model = load_pollutant_model("co", h)
 
+        # Track which pollutants the analytic heuristic had to stand in for, and
+        # which of its inputs were invented constants rather than measurements.
+        # Previously a station served entirely by the heuristic reported
+        # `fallback_used: false` and `status: "succeeded"`, so an invented 5 m/s
+        # wind and 500 m PBL were indistinguishable from a model prediction.
+        heuristic_pollutants: list[str] = []
+
         pm25_pred = _model_predict(pm25_model, features, "pm25")
         if pm25_pred is None:
             pm25_pred = _fallback_pm25(features, h)
+            heuristic_pollutants.append("pm25")
         pm10_pred = _model_predict(pm10_model, features, "pm10")
         if pm10_pred is None:
             pm10_pred = _fallback_pm10(pm25_pred, features, h)
+            heuristic_pollutants.append("pm10")
         o3_pred = _model_predict(o3_model, features, "o3")
         if o3_pred is None:
             o3_pred = _fallback_o3(features, h)
+            heuristic_pollutants.append("o3")
         no2_pred = _model_predict(no2_model, features, "no2")
         if no2_pred is None:
             no2_pred = _fallback_no2(features)
+            heuristic_pollutants.append("no2")
         so2_pred = _model_predict(so2_model, features, "so2")
         if so2_pred is None:
             so2_pred = _fallback_so2(features)
+            heuristic_pollutants.append("so2")
         co_pred = _model_predict(co_model, features, "co")
         if co_pred is None:
             co_pred = _fallback_co(features)
+            heuristic_pollutants.append("co")
 
         aqi_val, category, dominant = calculate_aqi(
             pm25_pred,
@@ -422,6 +467,7 @@ def predict_pollutants(features: dict, horizons=None) -> list[dict]:
             so2_pred,
             co_pred,
         )
+        invented = missing_fallback_inputs(features) if heuristic_pollutants else []
         predictions.append(
             {
                 "horizon_hours": int(h),
@@ -434,6 +480,11 @@ def predict_pollutants(features: dict, horizons=None) -> list[dict]:
                 "aqi_pred": aqi_val,
                 "aqi_category": category,
                 "dominant_pollutant": dominant,
+                # Provenance for the numbers above. Additive keys: consumers that
+                # ignore them keep working, but nothing has to guess any more.
+                "heuristic_pollutants": heuristic_pollutants,
+                "heuristic_used": bool(heuristic_pollutants),
+                "invented_inputs": invented,
             }
         )
     return predictions

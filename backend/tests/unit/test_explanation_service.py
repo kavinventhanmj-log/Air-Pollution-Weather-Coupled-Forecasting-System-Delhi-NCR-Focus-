@@ -180,3 +180,37 @@ def test_natural_language_prediction_line():
     assert "PM25 123.5" in joined
     assert "AQI 168 (Unhealthy)" in joined
     assert "dominated by pm25" in joined
+
+
+def test_natural_language_never_renders_literal_none():
+    """No caller shape may surface the text "None" in the narrative.
+
+    The real caller (``api/explanation.py``) passes only ``{"pm25_pred": ...}``,
+    because the AQI there is a PM2.5-only sub-index and the other sub-indices are
+    deliberately absent. Unguarded ``.get()`` calls turned those absences into the
+    literal string "None", which the AI Explanation page rendered as
+    "with AQI None (None), dominated by None.". The previous test only covered a
+    fully populated prediction, so it could not catch this.
+    """
+    partial = {"pm25_pred": 87.4}
+    lines = svc.generate_natural_language({"humidity": 50.0}, [{"feature": "temperature"}], partial)
+    joined = "\n".join(lines)
+    assert "PM25 87.4" in joined
+    assert "None" not in joined
+    assert "null" not in joined.lower()
+
+    # Same guarantee for a prediction carrying an AQI but no category/dominant.
+    mid = {"pm25_pred": 50.0, "aqi_pred": 120, "dominant_pollutant": "pm25"}
+    joined_mid = "\n".join(
+        svc.generate_natural_language({"humidity": 50.0}, [{"feature": "temperature"}], mid)
+    )
+    assert "None" not in joined_mid
+    assert "AQI 120" in joined_mid
+
+    # And when there is no scorable concentration at all, no line is invented.
+    empty = {"aqi_pred": 100}
+    joined_empty = "\n".join(
+        svc.generate_natural_language({"humidity": 50.0}, [{"feature": "temperature"}], empty)
+    )
+    assert "None" not in joined_empty
+    assert "Forecast concentrations" not in joined_empty
