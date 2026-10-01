@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from datetime import UTC, datetime, timedelta
 
 import joblib
@@ -13,6 +14,19 @@ from ..utils.helpers import haversine_distance, repo_root
 logger = logging.getLogger("aerocast.forecast")
 
 MODEL_DIR = str(repo_root() / "models")
+
+#: Loaded-artifact cache. Keys are bare artifact names (``xgboost_pm25_1h``)
+#: because callers/tests inspect ``_MODEL_CACHE`` directly by name. Values are
+#: the loaded model object or ``None`` for missing/corrupt artifacts, so a bad
+#: artifact fails closed once and is not re-probed from disk per request. The
+#: parallel ``*_DIR`` maps record the ``MODEL_DIR`` each entry was produced
+#: under; a cache entry older than the current ``MODEL_DIR`` is treated as a
+#: miss so an artifact cached under one directory is never served for another.
+_MODEL_CACHE: dict[str, object | None] = {}
+_MODEL_CACHE_DIR: dict[str, str] = {}
+_POLLUTANT_CACHE: dict[tuple[str, int | None], str | None] = {}
+_POLLUTANT_CACHE_DIR: dict[tuple[str, int | None], str] = {}
+_cache_lock = threading.RLock()
 
 DEFAULT_HORIZONS = [1, 6, 12, 24, 48, 72]
 
@@ -106,7 +120,7 @@ FEATURE_NAMES = [
 ]
 
 
-def load_model(model_name: str):
+def _load_model_uncached(model_name: str):
     path = os.path.join(MODEL_DIR, f"{model_name}.joblib")
     if os.path.exists(path):
         try:
@@ -122,6 +136,30 @@ def load_model(model_name: str):
     return None
 
 
+def clear_model_cache() -> None:
+    """Drop all cached model artifacts and pollutant resolutions.
+
+    Forces subsequent ``load_model``/``load_pollutant_model`` calls to re-probe
+    the filesystem. Call this after retraining/redeploying artifacts; it is not
+    invoked from unrelated application paths.
+    """
+    with _cache_lock:
+        _MODEL_CACHE.clear()
+        _MODEL_CACHE_DIR.clear()
+        _POLLUTANT_CACHE.clear()
+        _POLLUTANT_CACHE_DIR.clear()
+
+
+def load_model(model_name: str):
+    with _cache_lock:
+        if model_name in _MODEL_CACHE and _MODEL_CACHE_DIR.get(model_name) == MODEL_DIR:
+            return _MODEL_CACHE[model_name]
+        result = _load_model_uncached(model_name)
+        _MODEL_CACHE[model_name] = result
+        _MODEL_CACHE_DIR[model_name] = MODEL_DIR
+        return result
+
+
 def available_models() -> list[str]:
     if not os.path.isdir(MODEL_DIR):
         return []
@@ -129,16 +167,27 @@ def available_models() -> list[str]:
 
 
 def load_pollutant_model(pollutant: str, horizon_hours: int | None = None):
-    for model_type in ("xgboost", "random_forest", "rf", "persistence", "gbm"):
-        suffixes = [f"_{horizon_hours}h", f"_{horizon_hours}", ""]
-        if horizon_hours is None:
-            suffixes = [""]
-        for suffix in suffixes:
-            name = f"{model_type}_{pollutant}{suffix}"
-            model = load_model(name)
-            if model is not None:
-                return model
-    return None
+    key = (pollutant, horizon_hours)
+    with _cache_lock:
+        if key in _POLLUTANT_CACHE and _POLLUTANT_CACHE_DIR.get(key) == MODEL_DIR:
+            resolved_name = _POLLUTANT_CACHE[key]
+            if resolved_name is None:
+                return None
+            return load_model(resolved_name)
+        for model_type in ("xgboost", "random_forest", "rf", "persistence", "gbm"):
+            suffixes = [f"_{horizon_hours}h", f"_{horizon_hours}", ""]
+            if horizon_hours is None:
+                suffixes = [""]
+            for suffix in suffixes:
+                name = f"{model_type}_{pollutant}{suffix}"
+                model = load_model(name)
+                if model is not None:
+                    _POLLUTANT_CACHE[key] = name
+                    _POLLUTANT_CACHE_DIR[key] = MODEL_DIR
+                    return model
+        _POLLUTANT_CACHE[key] = None
+        _POLLUTANT_CACHE_DIR[key] = MODEL_DIR
+        return None
 
 
 #: Features whose training-time value was produced by a real measurement, so
