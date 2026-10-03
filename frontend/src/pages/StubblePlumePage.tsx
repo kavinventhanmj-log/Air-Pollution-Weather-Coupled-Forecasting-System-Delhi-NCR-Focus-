@@ -92,7 +92,7 @@ export default function StubblePlumePage() {
             <KpiCard label="Total fires (24 h)" value={fire?.total_fires ?? 0} tone={fire?.total_fires ? 'warn' : 'default'} />
             <KpiCard label="High confidence" value={fire?.high_confidence_fires ?? '--'} />
             <KpiCard label="Mean fire radiative power" value={fmt(fire?.mean_frp, 1)} unit="MW" />
-            <KpiCard label="Source region" value={fire?.region ?? 'NCR periphery'} sub={fire?.date?.replace('T', ' ').slice(0, 16) ?? undefined} />
+            <KpiCard label="Source region" value={fire?.region ?? 'Unknown'} sub={fire?.date?.replace('T', ' ').slice(0, 16) ?? undefined} />
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
@@ -111,12 +111,10 @@ export default function StubblePlumePage() {
                   <li>Distance from Delhi NCR</li>
                   <li>Atmospheric dispersion conditions</li>
                 </ul>
-                {fire?.region === 'NCR periphery' && (
-                  <p className="text-xs text-slate-500">
-                    Simulated (2023–24 synthetic) fire history is never used in these metrics; maps may show
-                    it only as a clearly-labelled grey overlay when toggled on.
-                  </p>
-                )}
+                <p className="text-xs text-slate-500">
+                  Simulated (2023–24 synthetic) fire history is never used in these metrics; maps may show
+                  it only as a clearly-labelled grey overlay when toggled on.
+                </p>
                 <p className="mt-3 text-amber-800">
                   Note: this is an estimated transport-risk indicator derived from satellite
                   hotspots + NWP winds — not a full regional chemical-transport simulation.

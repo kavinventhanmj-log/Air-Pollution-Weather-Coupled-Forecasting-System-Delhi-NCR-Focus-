@@ -17,8 +17,18 @@ jobs:
           cache: pip
       - name: Install project and dev dependencies
         run: pip install -e ".[dev]"
-      - name: Lint (ruff, scoped to services/API/test code)
-        run: python -m ruff check backend/app backend/tests
+      # Scope includes the operational-safety code, not just services/API/tests.
+      # backend/scripts/* (alembic_db_url.py, backfill_fire_provenance.py, ...),
+      # backend/conftest.py and alembic/env.py implement the fail-closed database
+      # and provenance guards; leaving them unlinted means a silent regression in
+      # them cannot fail the build. alembic/versions/* is deliberately excluded:
+      # those are frozen historical migrations, covered by the `migrations` job,
+      # which applies them to a real PostgreSQL instead. This exact scope is
+      # asserted by backend/tests/unit/test_ci_lint_scope.py.
+      - name: Lint (ruff, services/API/tests + operational-safety code)
+        run: >-
+          python -m ruff check backend/app backend/tests backend/conftest.py
+          backend/scripts alembic/env.py
       - name: Run backend test suite
         run: python -m pytest backend/tests -q --tb=short
 

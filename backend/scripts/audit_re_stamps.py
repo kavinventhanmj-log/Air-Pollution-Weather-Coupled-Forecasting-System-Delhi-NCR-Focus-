@@ -137,7 +137,9 @@ def main() -> int:
             continue
         shown = ", ".join(
             f"{k}=NULL" if v == SENTINEL else f"{k}={v}"
-            for k, v in zip(VALUE_COLUMNS, values)
+            # strict: a length drift between VALUE_COLUMNS and `values` must fail
+            # loudly here rather than silently truncating a re-stamp audit row.
+            for k, v in zip(VALUE_COLUMNS, values, strict=True)
         )
         print(f"  {name:<22} n={n:<5} {first_ts} .. {last_ts}  {shown}")
 
