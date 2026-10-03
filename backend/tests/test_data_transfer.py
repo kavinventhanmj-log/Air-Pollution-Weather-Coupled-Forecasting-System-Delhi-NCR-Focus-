@@ -206,27 +206,33 @@ def test_export_import_roundtrip_is_unchanged(client, db_session):
 
 
 class TestImportTimestampTimezone:
-    """Imported timestamps must land in the app's naive-IST convention.
+    """Imported timestamps must land in the app's naive-UTC convention.
 
-    The parser used to *strip* any trailing ``Z`` / ``+05:30`` marker instead of
-    applying it, so two spellings of the same instant were stored as two different
-    wall-clock times and every offset-bearing import was shifted by up to 5 h 30 m.
+    Two defects are pinned here. The parser used to *strip* any trailing ``Z`` /
+    ``+05:30`` marker instead of applying it, so two spellings of the same instant
+    were stored as two different wall-clock times and every offset-bearing import
+    was shifted by up to 5 h 30 m. It then normalised to naive IST, which happened
+    to hide that bug for the two spellings above but broke the documented
+    ``/api/export/*`` -> ``/api/import/*`` round-trip on PostgreSQL, where
+    ``export.py`` serialises ``.isoformat()`` and therefore emits ``+00:00``: an
+    exported instant came back in shifted by 5 h 30 m.
     """
 
     @pytest.mark.parametrize(
         "raw",
         ["2026-01-01 00:00:00Z", "2026-01-01T00:00:00+00:00", "2026-01-01 00:00:00+0000"],
     )
-    def test_utc_forms_convert_to_ist(self, raw):
-        assert _parse_timestamp(raw) == datetime(2026, 1, 1, 5, 30, 0)
+    def test_utc_forms_stay_utc(self, raw):
+        assert _parse_timestamp(raw) == datetime(2026, 1, 1, 0, 0, 0)
 
     def test_the_two_spellings_of_one_instant_agree(self):
         assert _parse_timestamp("2026-01-01 00:00:00Z") == _parse_timestamp(
             "2026-01-01 05:30:00+05:30"
         )
 
-    def test_explicit_ist_offset_is_preserved_as_wall_clock(self):
-        assert _parse_timestamp("2026-01-01 05:30:00+05:30") == datetime(2026, 1, 1, 5, 30, 0)
+    def test_explicit_ist_offset_is_converted_to_utc(self):
+        """05:30+05:30 is 00:00 UTC - the offset is applied, not discarded."""
+        assert _parse_timestamp("2026-01-01 05:30:00+05:30") == datetime(2026, 1, 1, 0, 0, 0)
 
     @pytest.mark.parametrize(
         "raw",
@@ -237,7 +243,7 @@ class TestImportTimestampTimezone:
             "01-01-2026 05:30:00",
         ],
     )
-    def test_naive_values_are_already_ist_and_untouched(self, raw):
+    def test_naive_values_are_already_utc_and_untouched(self, raw):
         assert _parse_timestamp(raw) == datetime.strptime(
             "2026-01-01 05:30:00" if raw.endswith(("05:30", "05:30:00")) else "2026-01-01 00:00:00",
             "%Y-%m-%d %H:%M:%S",

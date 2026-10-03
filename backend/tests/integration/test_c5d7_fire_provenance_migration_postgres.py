@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import sqlalchemy as sa
@@ -140,7 +141,11 @@ def test_upgrade_adds_provenance_columns_and_defends_legacy_rows(pg_engine):
 
     _reset(pg_engine, legacy_rows=[{
         "sat": "SNPP", "lat": 30.5, "lon": 76.1,
-        "ts": sa.text("now() - interval '1 day'"), "conf": "high", "frp": 90.0,
+        # A real Python datetime, not sa.text(): `acq_date` is TIMESTAMPTZ and
+        # this value is bound as a parameter, so it must be a value psycopg can
+        # adapt. Every other insert in this file inlines now() directly in SQL;
+        # a TextClause here raised "cannot adapt type 'TextClause'".
+        "ts": datetime.now(UTC) - timedelta(days=1), "conf": "high", "frp": 90.0,
     }])
 
     command.upgrade(_config(pg_engine), "head")

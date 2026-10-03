@@ -89,29 +89,42 @@ EXOGENOUS_FEATURES = [
 ]
 
 
-#: The application's storage convention for station observations is *naive IST
-#: wall-clock*: ``cpcb_service.upsert_ncr_data`` parses CPCB ``last_update`` in
-#: IST and then drops the tzinfo, and the weather importers follow suit. Naive
-#: values therefore cannot be assumed to be UTC.
+#: Every naive timestamp the application persists is **UTC**. ``cpcb_service.
+#: upsert_ncr_data`` parses CPCB ``last_update`` as IST but converts to UTC before
+#: stripping the tzinfo, ``api.import_`` normalises to UTC, and the weather
+#: importers follow suit. The serving code (``api.summary``, ``forecast_service``,
+#: ``refresh_service``) reads a naive stored value as UTC wall-clock, so a naive
+#: value may be assumed to be UTC.
+#:
+#: This constant is retained for the one case that is genuinely IST-native:
+#: legacy naive-IST rows that have not yet been converted. Pass it explicitly as
+#: ``assume_tz=IST`` rather than relying on it as a default.
 IST = ZoneInfo("Asia/Kolkata")
 
 
-def coerce_utc_naive(series: pd.Series, *, assume_tz: str | ZoneInfo = IST) -> pd.Series:
+def coerce_utc_naive(series: pd.Series, *, assume_tz: str | ZoneInfo = UTC) -> pd.Series:
     """Normalise a datetime series to naive-UTC.
 
     Aware inputs are converted from their own offset. **Naive** inputs are first
     interpreted in ``assume_tz`` before conversion.
 
-    Getting the naive case wrong is not cosmetic. ``pd.to_datetime(series,
-    utc=True)`` silently treats a naive value as already being UTC, so a reading
-    recorded at 11:30 IST stayed at 11:30 instead of becoming 06:00 UTC. Since
-    FIRMS acquisition times are genuine UTC, every fire-detection window was then
+    Getting the naive case wrong is not cosmetic, in either direction.
+
+    ``pd.to_datetime(series, utc=True)`` silently treats a naive value as already
+    being UTC. That was once the bug here: a reading recorded at 11:30 IST stayed
+    at 11:30 instead of becoming 06:00 UTC, so every FIRMS window (genuine UTC)
     joined 5 h 30 m out of phase against the pollution and weather rows - long
     enough to drop real detections and to attach the wrong ones.
 
-    ``assume_tz`` is a parameter because the sources genuinely differ: station
-    observations are IST wall-clock, while FIRMS ``acq_date``/``acq_time`` are UTC
-    by definition. Pass ``UTC`` for the latter.
+    The naive input convention has since been unified the *other* way: the
+    application now stores naive **UTC** end to end (see ``IST`` above), so a
+    naive value is interpreted as UTC by default. Defaulting to ``IST`` instead
+    would re-introduce the same 5 h 30 m phase error against the serving code,
+    which reads naive stored values as UTC: the fire window is queried on the raw
+    UTC axis while the panel was shifted back 5 h 30 m, so no fire ever aligned.
+
+    ``assume_tz`` remains a parameter for legacy naive-IST rows that have not been
+    converted yet. Pass ``IST`` for those; do not change the default.
     """
     dt = pd.to_datetime(series, errors="coerce")
     if isinstance(dt.dtype, pd.DatetimeTZDtype):
@@ -168,6 +181,10 @@ def align_observations(
     poll = poll_df.copy()
     wx = wx_df.copy()
 
+    # Station observations are stored naive-UTC, and fires naive-UTC, so both
+    # coercions use the UTC default. They must share one axis: the fire window is
+    # derived from the raw stored timestamps, so shifting only these would put the
+    # panel 5 h 30 m out of phase with every FIRMS join.
     poll["timestamp"] = coerce_utc_naive(poll["timestamp"])
     wx["timestamp"] = coerce_utc_naive(wx["timestamp"])
     poll["hour"] = poll["timestamp"].dt.floor("h")
@@ -351,10 +368,10 @@ def add_fire_features(
 
     fires = fires_df.copy()
     # FIRMS acquisition times are UTC by definition (the API documents
-    # ``acq_time`` as HHMM UTC), unlike the station observations, which are IST
-    # wall-clock. Coerce each with its own assumed timezone. The default is UTC
-    # because every caller passes either a raw FIRMS feed or rows already read
-    # back from ``fire_readings``, where ``acq_date`` is stored naive-UTC.
+    # ``acq_time`` as HHMM UTC), and rows read back from ``fire_readings`` store
+    # ``acq_date`` as naive-UTC, so UTC is correct for both and matches the
+    # default. Station observations are naive-UTC too, so this now puts fires and
+    # station rows on the same axis rather than 5 h 30 m apart.
     fires["acq_timestamp"] = coerce_utc_naive(fires["acq_date"], assume_tz=fire_tz)
     fires = fires.dropna(subset=["acq_timestamp", "lat", "lon"]).reset_index(drop=True)
     if fires.empty:

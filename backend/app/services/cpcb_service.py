@@ -20,7 +20,7 @@ Numeric fields are strings ("7") and missing values are "NA".
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -429,7 +429,15 @@ def upsert_ncr_data(db, observations: list[NormalizedObservation]) -> dict[str, 
     _STORED = ("pm25", "pm10", "o3", "no2", "so2", "co", "nh3", "pb")
     source = POLLUTION_SOURCE
     for station, obs in matched:
-        ts = obs.timestamp.replace(tzinfo=None)  # store IST wall-clock (matches app convention)
+        # CPCB reports ``last_update`` in IST, so ``_parse_timestamp`` returns an
+        # IST-aware value. Convert it to UTC *before* dropping the tzinfo: every
+        # naive timestamp this application persists is UTC (see
+        # ``app.api.summary``, ``app.services.forecast_service`` and
+        # ``app.services.refresh_service``, all of which read a naive stored value
+        # as UTC wall-clock). Stripping the tzinfo instead would store IST
+        # wall-clock under a UTC contract and shift every reading 5 h 30 m into
+        # the future.
+        ts = obs.timestamp.astimezone(UTC).replace(tzinfo=None)
         existing = (
             db.query(PollutionReading)
             .filter(PollutionReading.station_id == station.id, PollutionReading.timestamp == ts)

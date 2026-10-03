@@ -6,7 +6,6 @@ import sys
 import tempfile
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -86,9 +85,14 @@ def pytest_configure(config) -> None:
 _RUN_DIR = pathlib.Path(tempfile.mkdtemp(prefix="aerocast_ncr_test_"))
 TEST_DB_PATH = _RUN_DIR / "test.db"
 
-#: Station observations are stored as naive IST wall-clock (see
-#: ``cpcb_service.upsert_ncr_data``), which the seed below must respect.
-IST = ZoneInfo("Asia/Kolkata")
+#: Every naive timestamp this project persists is UTC. The serving contract is
+#: spelled out in ``app.api.summary`` / ``app.services.forecast_service`` /
+#: ``app.services.refresh_service``, all of which read a naive stored value as
+#: UTC wall-clock, so the seed below must match it exactly. Storing station
+#: observations as naive IST here placed seeded rows 5 h 30 m in the *future*
+#: relative to those consumers, which is what broke the lag-1 and observation-age
+#: assertions.
+TEST_TZ = UTC
 
 # Drop any stale fixed-path database left by the old scheme so it cannot be
 # picked up or mistaken for a valid fixture.
@@ -159,23 +163,27 @@ def _seed_test_data(session):
     seed_data(session)
     station = session.query(Station).filter(Station.name == "Anand Vihar").first()
 
-    # Two distinct storage conventions meet in this database, and the fixture has
-    # to honour both or the fire/pollution join is silently misaligned by 5 h 30 m:
+    # Every naive timestamp this fixture writes is UTC, matching the application
+    # serving contract (`summary._naive_utc`, `forecast_service._as_naive_utc`,
+    # `refresh_service._existing_timestamps`), which read a naive stored value as
+    # UTC wall-clock.
     #
-    #   * station observations (pollution + weather) are naive **IST** wall-clock,
-    #     per cpcb_service.upsert_ncr_data, and
-    #   * fire acquisition times are naive **UTC**, per FIRMS' acq_time.
+    #   * station observations (pollution + weather) and forecast origin times are
+    #     naive **UTC**, and
+    #   * fire acquisition times are naive **UTC** as well, because FIRMS
+    #     `acq_time` is UTC by definition.
     #
-    # Deriving both from one `base` made the seeded fires 5 h 30 m later than
-    # reality relative to the readings that feed the models, which is precisely
-    # the defect coerce_utc_naive now guards against.
+    # These used to differ (station observations naive IST, fires naive UTC). The
+    # IST seeding put every station row 5 h 30 m in the future relative to the
+    # serving code's "now", so the lag-1 feature window, the forecast-horizon
+    # targets, the refresh upsert and the summary observation age all resolved to
+    # the wrong row - or, for the age, to a negative number.
     base_utc = datetime.now(UTC).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
-    base_ist = base_utc.astimezone(IST).replace(tzinfo=None)
 
     readings = []
     weather = []
     for i in range(12):
-        ts = base_ist - timedelta(hours=i)
+        ts = base_utc - timedelta(hours=i)
         pm25 = round(95 + 6 * i, 1)
         pm10 = round(180 + 10 * i, 1)
         o3 = round(55 + i, 1)
@@ -214,13 +222,12 @@ def _seed_test_data(session):
     session.add_all(readings)
     session.add_all(weather)
 
-    # Fires are naive UTC. Anchor them to the *converted* release hour rather than
-    # to `base_utc`: the newest reading is stored as IST wall-clock, which is
-    # 5 h 30 m ahead of UTC, so a fire "2 h ago" relative to the raw clock sits
-    # 3 h 30 m *after* the release hour the feature builder derives - outside the
-    # trailing window, and excluded from every fire feature. Anchoring to the
-    # release hour keeps the seed representative of a real trailing window.
-    fire_ts = base_ist.astimezone(UTC).replace(tzinfo=None) - timedelta(hours=2)
+    # Fires are naive UTC, because FIRMS `acq_time` is UTC by definition. They are
+    # anchored two hours before the release hour so they sit inside the trailing
+    # window the feature builder derives and actually contribute to the fire
+    # features - a fire stamped relative to the raw wall clock rather than to the
+    # release hour would fall outside that window and be excluded from every one.
+    fire_ts = base_utc - timedelta(hours=2)
     session.add_all(
         [
             FireReading(
@@ -277,8 +284,8 @@ def _seed_test_data(session):
     forecasts = []
     for i in range(12):
         # Forecast origin times sit on the same axis as the weather they extend,
-        # i.e. the naive-IST station timeline.
-        ts = base_ist - timedelta(hours=i)
+        # i.e. the naive-UTC station timeline.
+        ts = base_utc - timedelta(hours=i)
         pm25 = round(100 + 6 * i, 1)
         pm10 = round(190 + 10 * i, 1)
         o3 = round(60 + i, 1)

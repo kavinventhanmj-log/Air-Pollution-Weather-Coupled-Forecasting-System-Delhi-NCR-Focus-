@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 import requests
@@ -311,6 +311,18 @@ def test_fetch_url_has_no_key_in_query_but_uses_params(monkeypatch):
 # --------------------------------------------------------------------------- upsert_ncr_data
 
 
+def _stored_utc(ts_str: str) -> datetime:
+    """The naive-UTC value ``upsert_ncr_data`` must persist for an IST feed stamp.
+
+    Derived rather than hard-coded so the expectation tracks the conversion
+    instead of pinning a wall-clock: CPCB ``last_update`` is IST, and the
+    application stores naive UTC, so ``09-09-2026 14:00:00`` IST is persisted as
+    ``08:30:00`` UTC. Spelling the expected literal out instead would let the
+    5 h 30 m shift in ``upsert_ncr_data`` go unnoticed.
+    """
+    return _parse_timestamp(ts_str).astimezone(UTC).replace(tzinfo=None)
+
+
 def _obs(ts_str, **values):
     return NormalizedObservation(
         station_name="Anand Vihar",
@@ -343,7 +355,7 @@ def test_upsert_is_idempotent_no_duplicates(db_session):
     from app.models.db_models import PollutionReading
     count = (
         db_session.query(PollutionReading)
-        .filter(PollutionReading.station_id == 1, PollutionReading.timestamp == datetime(2026, 9, 9, 14, 0, 0))
+        .filter(PollutionReading.station_id == 1, PollutionReading.timestamp == _stored_utc("09-09-2026 14:00:00"))
         .count()
     )
     assert count == 1
@@ -375,7 +387,7 @@ def test_upsert_persists_nh3_and_pb(db_session):
     assert upsert_ncr_data(db_session, [obs])["inserted"] == 1
     row = (
         db_session.query(PollutionReading)
-        .filter(PollutionReading.timestamp == datetime(2026, 9, 9, 14, 30, 0))
+        .filter(PollutionReading.timestamp == _stored_utc("09-09-2026 14:30:00"))
         .first()
     )
     assert row is not None
@@ -398,7 +410,7 @@ def test_upsert_nh3_only_reading_is_not_scored_but_is_stored(db_session):
     assert upsert_ncr_data(db_session, [obs])["inserted"] == 1
     row = (
         db_session.query(PollutionReading)
-        .filter(PollutionReading.timestamp == datetime(2026, 9, 9, 15, 0, 0))
+        .filter(PollutionReading.timestamp == _stored_utc("09-09-2026 15:00:00"))
         .first()
     )
     assert row is not None

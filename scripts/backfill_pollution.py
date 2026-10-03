@@ -25,6 +25,7 @@ import os
 import pathlib
 import sys
 import urllib.request
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -48,6 +49,14 @@ DATASET_URL = (
     "https://raw.githubusercontent.com/Vonter/india-cpcb-aqi/main/data/cpcb-aqi.csv.gz"
 )
 SOURCE_TAG = "cpcb_dataset"
+
+# The CPCB hourly-AQI mirror publishes its ``Date`` column and its ``HH:MM:SS``
+# hour columns as India local wall-clock, with no offset. Every naive timestamp
+# the application persists is UTC (``cpcb_service.upsert_ncr_data``,
+# ``app.api.summary``), so these are interpreted as IST and converted rather than
+# having their tzinfo stripped - storing the wall-clock unchanged would shift every
+# backfilled reading 5 h 30 m into the future.
+IST = ZoneInfo("Asia/Kolkata")
 
 # Dataset "Station Name" -> canonical 17-station row. Common agency suffixes /
 # city locators (", Delhi - DPCC" etc.) are stripped first by _normalise.
@@ -104,7 +113,7 @@ def hour_columns(df: pd.DataFrame) -> list[str]:
 
 
 def join_records(df: pd.DataFrame, stations: dict[str, Station]):
-    """Yield (station, timestamp, aqi) INSERT-worthy tuples, IST-naive."""
+    """Yield (station, y, m, d, h, aqi) INSERT-worthy tuples, IST wall-clock."""
     cols = hour_columns(df)
     seen = 0
     for _, row in df.iterrows():
@@ -140,7 +149,15 @@ def upsert(df: pd.DataFrame, db, stations: dict[str, Station]) -> dict:
     }
     inserted = skipped = 0
     for station, y, m, d, h, aqi in join_records(df, stations):
-        ts = pd.Timestamp(year=y, month=m, day=d, hour=h, tz=None).to_pydatetime()
+        # The dataset's wall-clock is IST; the application's storage convention is
+        # naive UTC, so localise as IST and convert rather than leaving the
+        # wall-clock in place.
+        ts = (
+            pd.Timestamp(year=y, month=m, day=d, hour=h, tz=IST)
+            .tz_convert("UTC")
+            .tz_localize(None)
+            .to_pydatetime()
+        )
         key = (station.id, ts)
         if key in existing:
             skipped += 1

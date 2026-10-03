@@ -52,8 +52,9 @@ stats = stations[["station", "latitude", "longitude"]]
 df, _ = align_observations(poll, wx, stats)
 log(f"align rows={len(df)} station_counts={df.groupby('station').size().to_dict()}")
 
-# FIRMS acquisition times are UTC by definition, so they must not be read as
-# naive IST like the station observations.
+# FIRMS acquisition times are UTC by definition, and station observations are
+# stored naive-UTC, so both land on the same axis with no shift. `assume_tz` is
+# passed explicitly to keep that true regardless of the current default.
 fires["acq_timestamp"] = coerce_utc_naive(fires["acq_date"], assume_tz=UTC)
 fires = fires.dropna(subset=["acq_timestamp", "lat", "lon"]).reset_index(drop=True)
 log(f"fires valid={len(fires)}")

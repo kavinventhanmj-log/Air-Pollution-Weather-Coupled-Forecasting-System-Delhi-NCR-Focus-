@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from ml.preprocessing.training_dataset import (
+    IST,
     ROLLING_WINDOWS,
     add_fire_features,
     align_observations,
@@ -42,10 +43,10 @@ def _make_frames(n_hours=40, n_stations=2):
     #
     # FIRMS acquisition times are UTC, so they are timezone-aware here rather than
     # naive. The station timestamps above are deliberately left naive, matching the
-    # application's naive-IST storage convention, and `coerce_utc_naive` is what
-    # has to reconcile the two. Writing the fires as naive-UTC instead would make
-    # these tests pass under the old (incorrect) "naive means UTC" assumption and
-    # fail to notice a 5 h 30 m misalignment between the two sources.
+    # application's naive-UTC storage convention, and `coerce_utc_naive` is what
+    # has to reconcile the two. The two must land on the same axis: a fire that is
+    # 2 h before the panel start has to be inside the trailing window, not 5 h 30 m
+    # off the end of it.
     fires = pd.DataFrame({
         "lat": [30.5, 30.5], "lon": [76.1, 76.1], "frp": [90.0, 200.0],
         "acq_date": [
@@ -64,34 +65,42 @@ class TestTimezoneConsistency:
         assert out.dt.tz is None
         assert out.iloc[0] == pd.Timestamp("2025-12-31 18:30:00")
 
-    def test_naive_input_is_read_as_ist_not_as_utc(self):
-        """The storage convention is naive IST wall-clock, so naive != UTC.
+    def test_naive_input_is_read_as_utc(self):
+        """The storage convention is naive UTC, so a naive value is already UTC.
 
-        ``cpcb_service.upsert_ncr_data`` parses CPCB ``last_update`` as IST and
-        stores it with the tzinfo stripped. ``pd.to_datetime(..., utc=True)``
-        treats a naive value as *already* UTC, so such a reading passed through
-        unchanged and every FIRMS window (genuine UTC) joined 5 h 30 m out of
-        phase against it.
+        ``cpcb_service.upsert_ncr_data`` parses CPCB ``last_update`` as IST,
+        converts it to UTC and then strips the tzinfo, and ``api.import_`` does
+        the same. Defaulting ``coerce_utc_naive`` to ``IST`` would shift every
+        stored reading back 5 h 30 m while the fire window stayed on the raw UTC
+        axis, so no fire ever aligned with the panel it was supposed to influence.
         """
-        naive_ist = pd.Series([pd.Timestamp("2024-01-01 11:30:00")])
-        out = coerce_utc_naive(naive_ist)
-        assert out.iloc[0] == pd.Timestamp("2024-01-01 06:00:00")
+        naive_utc = pd.Series([pd.Timestamp("2024-01-01 11:30:00")])
+        assert coerce_utc_naive(naive_utc).iloc[0] == pd.Timestamp("2024-01-01 11:30:00")
 
-    def test_aware_and_naive_ist_agree(self):
-        """Aware and naive forms of the same IST instant must coincide."""
+    def test_aware_ist_converts_to_utc(self):
+        """An offset-aware IST instant is converted, not re-read as wall-clock."""
         aware = coerce_utc_naive(pd.Series([pd.Timestamp("2024-01-01 11:30:00+05:30")]))
-        naive = coerce_utc_naive(pd.Series([pd.Timestamp("2024-01-01 11:30:00")]))
-        assert aware.iloc[0] == naive.iloc[0]
+        assert aware.iloc[0] == pd.Timestamp("2024-01-01 06:00:00")
+
+    def test_legacy_naive_ist_still_recoverable_explicitly(self):
+        """Legacy naive-IST rows must remain convertible via an explicit ``assume_tz``."""
+        naive_ist = pd.Series([pd.Timestamp("2024-01-01 11:30:00")])
+        aware = coerce_utc_naive(pd.Series([pd.Timestamp("2024-01-01 11:30:00+05:30")]))
+        legacy = coerce_utc_naive(naive_ist, assume_tz=IST)
+        assert legacy.iloc[0] == aware.iloc[0] == pd.Timestamp("2024-01-01 06:00:00")
+        # The default must NOT shift it - that is the bug this change removes.
+        assert coerce_utc_naive(naive_ist).iloc[0] == pd.Timestamp("2024-01-01 11:30:00")
 
     def test_assume_tz_utc_keeps_naive_firms_times(self):
         """FIRMS acquisition times are UTC, so naive ones must not be shifted."""
         s = pd.Series([pd.Timestamp("2024-01-01 06:00:00")])
         assert coerce_utc_naive(s, assume_tz=UTC).iloc[0] == pd.Timestamp("2024-01-01 06:00:00")
-        # ... and the default (IST) shifts the same value.
-        assert coerce_utc_naive(s).iloc[0] == pd.Timestamp("2024-01-01 00:30:00")
+        # ... and it is now also the default, so nothing needs to pass it.
+        assert coerce_utc_naive(s).iloc[0] == pd.Timestamp("2024-01-01 06:00:00")
 
     def test_ist_midnight_rolls_back_a_day(self):
-        out = coerce_utc_naive(pd.Series([pd.Timestamp("2024-01-01 00:00:00")]))
+        """Opting into legacy naive-IST still rolls midnight back a day."""
+        out = coerce_utc_naive(pd.Series([pd.Timestamp("2024-01-01 00:00:00")]), assume_tz=IST)
         assert out.iloc[0] == pd.Timestamp("2023-12-31 18:30:00")
 
     def test_output_is_always_naive(self):
@@ -133,9 +142,8 @@ class TestAlignmentHandling:
         df, report = align_observations(poll, wx, stations)
         assert report["duplicate_hour_rows_removed"]["pollution"] == 2
         # Derive the expected bucket from the retained row instead of hard-coding
-        # a wall-clock hour. Station timestamps are naive IST, so the UTC bucket is
-        # 5 h 30 m earlier; pinning "2026-01-01 00:00" would only pass while the
-        # IST-to-UTC conversion was missing.
+        # a wall-clock hour, so the assertion follows the conversion rather than
+        # pinning one particular assumed timezone.
         expected_hour = coerce_utc_naive(
             pd.Series([pd.Timestamp("2026-01-01 00:45:00")])
         ).iloc[0].floor("h")
@@ -190,13 +198,14 @@ class TestNoFutureLeakage:
         df, _ = build_training_dataset_from_dataframes(*_make_frames())
         assert (df["fire_count"] >= 0).all()
 
-        # The past fire is 2 h before the panel start in IST, i.e. 2025-12-31
-        # 21:30 UTC once station timestamps are converted. The earliest station
-        # hour is 18:00 UTC, so that fire sits *after* the first rows and is only
-        # inside the 3 h lookback from 22:00 UTC onward. Asserting the first row
-        # already saw it was only ever true while the two sources were both
-        # mislabelled by the same 5 h 30 m, so it now pins the real alignment:
-        # nothing before the detection, then a stable count of exactly one.
+        # The past fire is at 2025-12-31 22:00 UTC, 2 h before the panel starts at
+        # 2026-01-01 00:00. Both station timestamps (naive-UTC) and the fire
+        # (aware UTC) therefore land on one axis with no shift, and a 3 h lookback
+        # covers 22:00 from the very first row onward. So the first row does see
+        # it - which is precisely what could not be asserted while the panel was
+        # shifted 5 h 30 m against the fire window, and what the assertions below
+        # now pin: the detection is attributed to the right hours, and the +48 h
+        # fire never leaks in.
         ordered = df.sort_values("hour")
         assert (ordered["fire_count"] == 0).any(), "no row precedes the fire window"
         first_seen = ordered[ordered["fire_count"] > 0].iloc[0]
