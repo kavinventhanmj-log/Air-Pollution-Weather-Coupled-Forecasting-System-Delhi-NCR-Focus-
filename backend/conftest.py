@@ -5,9 +5,72 @@ import shutil
 import sys
 import tempfile
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+
+# --------------------------------------------------------------------------- #
+# Disposable-database guard
+#
+# ``db_session`` drops and recreates every table, so a stray non-SQLite
+# ``DATABASE_URL`` (the app reads the same variable) would let a local test run
+# destroy a live schema. Refuse that unless the operator explicitly opts in.
+# --------------------------------------------------------------------------- #
+
+#: Opt-in required before pytest will touch a non-SQLite database.
+ALLOW_LIVE_TEST_DB_ENV = "AEROCAST_ALLOW_LIVE_TEST_DB"
+
+_TRUE_VALUES = {"1", "true", "t", "yes", "y", "on"}
+
+
+class LiveTestDatabaseRefused(RuntimeError):
+    """A non-SQLite test target was refused because it is not disposable."""
+
+
+def _opt_in_enabled(value: str | None) -> bool:
+    return str(value or "").strip().lower() in _TRUE_VALUES
+
+
+def ensure_disposable_test_database(environ) -> None:
+    """Refuse to run when ``DATABASE_URL`` would target a non-throwaway database.
+
+    The message never echoes the URL, so no credential can leak through it.
+    """
+    url = (environ.get("DATABASE_URL") or "").strip()
+    if not url:
+        return
+    backend = url.split(":", 1)[0].split("+", 1)[0].strip().lower()
+    if backend == "sqlite":
+        return
+    if _opt_in_enabled(environ.get(ALLOW_LIVE_TEST_DB_ENV)):
+        return
+    raise LiveTestDatabaseRefused(
+        "Refusing to run pytest: DATABASE_URL points at a non-SQLite database "
+        "and the test suite drops and recreates every table. This would destroy "
+        "that database. Point DATABASE_URL at a throwaway SQLite file, or set "
+        f"{ALLOW_LIVE_TEST_DB_ENV}=1 to explicitly allow a dedicated test "
+        "database."
+    )
+
+
+def ensure_disposable_backend(backend_name: str, environ) -> None:
+    """Belt-and-braces check run immediately before the schema is dropped."""
+    if (backend_name or "").strip().lower() == "sqlite":
+        return
+    if _opt_in_enabled(environ.get(ALLOW_LIVE_TEST_DB_ENV)):
+        return
+    raise LiveTestDatabaseRefused(
+        "Refusing to drop tables on a non-SQLite test database. Set "
+        f"{ALLOW_LIVE_TEST_DB_ENV}=1 to explicitly allow a dedicated test "
+        "database."
+    )
+
+
+def pytest_configure(config) -> None:
+    """Abort before any test runs if the configured target is not disposable."""
+    ensure_disposable_test_database(os.environ)
+
 
 # Each pytest run gets its own database directory.
 #
@@ -283,6 +346,9 @@ def _seed_test_data(session):
 
 @pytest.fixture()
 def db_session():
+    # Belt-and-braces: refuse to drop tables on anything but a disposable
+    # SQLite target, even if the import-time guard was bypassed somehow.
+    ensure_disposable_backend(engine.url.get_backend_name(), os.environ)
     # Release every pooled connection before dropping the schema. On PostgreSQL
     # ``DROP TABLE`` needs an AccessExclusiveLock, which deadlocks against the
     # AccessShareLock still held by the session-scoped ``client`` fixture's
@@ -294,6 +360,17 @@ def db_session():
     with SessionLocal() as session:
         _seed_test_data(session)
         yield session
+
+
+@pytest.fixture()
+def db_guard():
+    """Expose the disposable-database guards for direct unit testing."""
+    return SimpleNamespace(
+        ensure_disposable_test_database=ensure_disposable_test_database,
+        ensure_disposable_backend=ensure_disposable_backend,
+        live_test_database_refused=LiveTestDatabaseRefused,
+        allow_env=ALLOW_LIVE_TEST_DB_ENV,
+    )
 
 
 @pytest.fixture(autouse=True)

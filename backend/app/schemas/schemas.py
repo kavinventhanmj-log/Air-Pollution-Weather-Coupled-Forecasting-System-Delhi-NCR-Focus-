@@ -678,6 +678,8 @@ class FireHotspot(BaseModel):
     frp: float | None = None
     confidence: str | None = None
     acq_date: datetime | None = None
+    synthetic: bool = False
+    source: str | None = None
 
 
 class FireHotspotsResponse(BaseModel):
@@ -686,7 +688,13 @@ class FireHotspotsResponse(BaseModel):
 
 
 class FireEvent(BaseModel):
-    """One stored FIRMS fire observation (facts only — no attribution)."""
+    """One stored fire observation (facts only — no attribution).
+
+    ``synthetic=True`` marks a simulated (2023-2024 training history) row;
+    ``source`` names its origin (``"synthetic_sim"`` / ``"firms_csv"`` /
+    ``"firms_live"``). Operational endpoints return real observations only
+    unless the caller explicitly requests the simulated overlay.
+    """
 
     id: int
     latitude: float
@@ -698,6 +706,8 @@ class FireEvent(BaseModel):
     satellite: str | None = None
     instrument: str | None = None
     daynight: str | None = None
+    synthetic: bool = False
+    source: str | None = None
 
 
 class FiresLatestResponse(BaseModel):
@@ -741,6 +751,8 @@ class PlumeRiskResponse(BaseModel):
     transport_risk_level: str | None = None
     stubble_impact_score: float | None = None
     estimated_pm25_contribution_ugm3: float | None = None
+    synthetic_fire_count: int | None = None
+    fire_basis: str | None = None
 
 
 class TransportDirectionResponse(BaseModel):

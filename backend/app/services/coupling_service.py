@@ -103,6 +103,7 @@ def _load_recent_fires(db, limit: int = 500):
 
     return (
         db.query(FireReading)
+        .filter(FireReading.synthetic.is_(False))
         .order_by(FireReading.acq_date.desc())
         .limit(limit)
         .all()

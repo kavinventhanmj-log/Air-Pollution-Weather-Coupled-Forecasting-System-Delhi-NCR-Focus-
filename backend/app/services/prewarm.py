@@ -101,7 +101,11 @@ def _entries() -> list[tuple[str, str, float, Callable[[object], object]]]:
          lambda db: transport_risk_service.get_current_transport_risk(db, fire_window_hours=72)),
         ("grap:current", "grap:current", 300, lambda db: grap_api._compute_grap_current(db)),
         ("fire-activity", "fire-activity", 300, lambda db: fire_api._compute_fire_activity(db)),
-        ("fire-hotspots", "fire-hotspots", 300, lambda db: fire_api._compute_fire_hotspots(db)),
+        # Only the default (real-only) variant is pre-warmed: it is the one the
+        # map requests. The key must come from the endpoint's own helper so a
+        # change there cannot silently warm an entry nobody reads.
+        ("fire-hotspots", fire_api.fire_hotspots_cache_key(False), 300,
+         lambda db: fire_api._compute_fire_hotspots(db, include_synthetic=False)),
         ("plume-risk", "plume-risk", 300, lambda db: fire_api._compute_plume_risk(db)),
         ("grid:forecast:24", "grid:forecast:24", 120, lambda db: grid_api._compute_grid(db, 24)),
     ]

@@ -121,7 +121,7 @@ def _compute_grap_current(db: Session) -> GrapAssessment:
     )
     mean_frp = (
         db.query(func.avg(FireReading.frp))
-        .filter(FireReading.acq_date >= since)
+        .filter(FireReading.acq_date >= since, FireReading.synthetic.is_(False))
         .scalar()
     )
     fire_mean_frp_mw = float(mean_frp) if mean_frp is not None else None

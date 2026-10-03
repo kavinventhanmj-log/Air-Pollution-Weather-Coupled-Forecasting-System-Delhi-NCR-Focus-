@@ -277,7 +277,8 @@ def apply_migrations():
 
     # fire_readings: instrument + brightness source attributes and the
     # hotspot uniqueness key (satellite, latitude, longitude, acq_date)
-    # mirroring the PostgreSQL alembic migration e2b1c3d4a5f7.
+    # mirroring the PostgreSQL alembic migration e2b1c3d4a5f7, plus the
+    # synthetic/source provenance columns mirroring c5d7e9f1a3b0.
     if "fire_readings" in table_names:
         fr_cols = {c["name"] for c in inspector.get_columns("fire_readings")}
         with engine.begin() as conn:
@@ -285,6 +286,12 @@ def apply_migrations():
                 conn.execute(sa.text("ALTER TABLE fire_readings ADD COLUMN instrument VARCHAR"))
             if "brightness" not in fr_cols:
                 conn.execute(sa.text("ALTER TABLE fire_readings ADD COLUMN brightness FLOAT"))
+            if "synthetic" not in fr_cols:
+                conn.execute(sa.text(
+                    "ALTER TABLE fire_readings ADD COLUMN synthetic BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "source" not in fr_cols:
+                conn.execute(sa.text("ALTER TABLE fire_readings ADD COLUMN source VARCHAR"))
             conn.execute(sa.text(
                 "DELETE FROM fire_readings WHERE id NOT IN ("
                 "  SELECT MAX(id) FROM fire_readings"

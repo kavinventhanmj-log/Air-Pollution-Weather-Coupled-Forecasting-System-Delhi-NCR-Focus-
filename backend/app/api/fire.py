@@ -79,7 +79,7 @@ def _compute_fire_activity(db: Session) -> FireActivityResponse:
     # mean two different things depending on where the process runs.
     now_utc = datetime.now(UTC).replace(tzinfo=None)
 
-    fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(1000).all()
+    fires = db.query(FireReading).filter(FireReading.synthetic.is_(False)).order_by(FireReading.acq_date.desc()).limit(1000).all()
     if not fires:
         return FireActivityResponse(total_fires=0, high_confidence_fires=0, mean_frp=0.0, region="Delhi NCR", date=now_utc)
     high_conf = sum(1 for f in fires if f.confidence and f.confidence.lower() == "high")
@@ -118,7 +118,18 @@ def get_plume_risk(db: Session = Depends(get_db)):
 
 
 def _compute_plume_risk(db: Session) -> PlumeRiskResponse:
-    fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(500).all()
+    # Real observations only: simulated stubble-fire history is excluded from
+    # the live risk assessment so it can never inflate the score. The count of
+    # excluded synthetic hotspots is surfaced for transparency.
+    query = db.query(FireReading).filter(FireReading.synthetic.is_(False))
+    fires = query.order_by(FireReading.acq_date.desc()).limit(500).all()
+    synthetic_in_window = len(
+        db.query(FireReading.id)
+        .filter(FireReading.synthetic.is_(True))
+        .order_by(FireReading.acq_date.desc())
+        .limit(500)
+        .all()
+    )
     if not fires:
         return PlumeRiskResponse(
             risk_level="LOW",
@@ -129,6 +140,8 @@ def _compute_plume_risk(db: Session) -> PlumeRiskResponse:
             distance_nearest_fire=999,
             confidence=0,
             factors=["No fire data available"],
+            synthetic_fire_count=synthetic_in_window,
+            fire_basis="No real FIRMS observations in the sampled history; synthetic history excluded",
         )
 
     reading, wind_speed, wind_deg = _latest_wind(db)
@@ -210,19 +223,53 @@ def _compute_plume_risk(db: Session) -> PlumeRiskResponse:
         transport_risk_level=impact["transport_risk_level"],
         stubble_impact_score=round(impact["stubble_impact_score"], 3),
         estimated_pm25_contribution_ugm3=est_contribution,
+        synthetic_fire_count=synthetic_in_window,
+        fire_basis="Real FIRMS observations only (synthetic history excluded)",
     )
 
 
 @router.get("/fire/hotspots", response_model=FireHotspotsResponse)
-def get_fire_hotspots(db: Session = Depends(get_db)):
-    """Recent FIRMS active-fire locations for map overlay (SIH26082)."""
+def get_fire_hotspots(
+    include_synthetic: bool = Query(default=False, description="Also include simulated (synthetic) hotspot history, labelled as synthetic"),
+    db: Session = Depends(get_db),
+):
+    """Recent FIRMS active-fire locations for map overlay (SIH26082).
+
+    Real (non-synthetic) observations only by default. Pass
+    ``include_synthetic=1`` to also return simulated stubble-fire history;
+    every returned hotspot is labelled with its ``synthetic``/``source``
+    provenance so the client can render simulated points distinctly and never
+    present them as live FIRMS detections.
+    """
     from ..services.ttl_cache import cached
 
-    return cached("fire-hotspots", 300, lambda: _compute_fire_hotspots(db))
+    return cached(
+        fire_hotspots_cache_key(include_synthetic),
+        300,
+        lambda: _compute_fire_hotspots(db, include_synthetic=include_synthetic),
+    )
 
 
-def _compute_fire_hotspots(db: Session) -> FireHotspotsResponse:
-    fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(1000).all()
+def fire_hotspots_cache_key(include_synthetic: bool) -> str:
+    """Cache key for a hotspots response.
+
+    ``include_synthetic`` is part of the response, so it has to be part of the
+    key: a constant key let the real-only payload be served to
+    ``include_synthetic=1`` (simulated overlay silently missing) and the
+    simulated payload be served to the default request (synthetic points drawn
+    on the operational map as if they were FIRMS detections).
+
+    Exported so the control-room pre-warm builds exactly the key the default
+    request reads.
+    """
+    return f"fire-hotspots:synthetic={int(bool(include_synthetic))}"
+
+
+def _compute_fire_hotspots(db: Session, include_synthetic: bool = False) -> FireHotspotsResponse:
+    query = db.query(FireReading)
+    if not include_synthetic:
+        query = query.filter(FireReading.synthetic.is_(False))
+    fires = query.order_by(FireReading.acq_date.desc()).limit(1000).all()
     hotspots = [
         FireHotspot(
             lat=f.latitude,
@@ -230,6 +277,8 @@ def _compute_fire_hotspots(db: Session) -> FireHotspotsResponse:
             frp=f.frp,
             confidence=f.confidence,
             acq_date=f.acq_date,
+            synthetic=f.synthetic,
+            source=f.source,
         )
         for f in fires
     ]
@@ -259,6 +308,7 @@ def get_latest_fires(
     fires = (
         db.query(FireReading)
         .filter(FireReading.acq_date >= since)
+        .filter(FireReading.synthetic.is_(False))
         .order_by(FireReading.acq_date.desc(), FireReading.id.desc())
         .limit(limit)
         .all()
@@ -279,6 +329,8 @@ def get_latest_fires(
                 satellite=f.satellite,
                 instrument=f.instrument,
                 daynight=f.daynight,
+                synthetic=f.synthetic,
+                source=f.source,
             )
             for f in fires
         ],

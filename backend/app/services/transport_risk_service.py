@@ -451,7 +451,9 @@ def get_current_transport_risk(db, fire_window_hours: int = 72) -> dict[str, Any
     since = now - timedelta(hours=fire_window_hours)
     if get_settings().database_url.startswith("sqlite"):
         since = since.replace(tzinfo=None)
-    fire_rows = db.query(FireReading).filter(FireReading.acq_date >= since).order_by(FireReading.acq_date.desc()).all()
+    fire_rows = db.query(FireReading).filter(
+        FireReading.acq_date >= since, FireReading.synthetic.is_(False)
+    ).order_by(FireReading.acq_date.desc()).all()
     fires_df = None
     if fire_rows:
         fires_df = pd.DataFrame(

@@ -22,7 +22,9 @@ def test_entries_use_the_same_keys_as_the_http_layer():
         "data-quality",
         "grap:current",
         "fire-activity",
-        "fire-hotspots",
+        # Spelled out, not imported from fire_hotspots_cache_key(): the guard
+        # only works if a rename or a changed key string fails here.
+        "fire-hotspots:synthetic=0",
         "plume-risk",
         "grid:forecast:24",
         "transport-risk:current:72",

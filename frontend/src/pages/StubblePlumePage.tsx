@@ -14,11 +14,11 @@ import type { PlumeRisk, FireActivity, FireHotspot, TransportRiskResponse } from
 
 const DELHI: { lat: number; lon: number } = { lat: 28.6139, lon: 77.209 }
 
-function fetchAll() {
+function fetchAll(showSynthetic: boolean) {
   return Promise.allSettled([
     getPlumeRisk().then((r) => r.data).catch(() => null as PlumeRisk | null),
     getFireActivity().then((r) => r.data).catch(() => null as FireActivity | null),
-    getFireHotspots()
+    getFireHotspots(showSynthetic)
       .then((r) => r.data.hotspots)
       .catch(() => [] as FireHotspot[]),
     getTransportRisk().then((r) => r.data).catch(() => null as TransportRiskResponse | null),
@@ -32,11 +32,12 @@ export default function StubblePlumePage() {
   const [transport, setTransport] = useState<TransportRiskResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showSynthetic, setShowSynthetic] = useState(false)
 
   const load = useCallback((attempt = 1) => {
     setLoading(true)
     setError(null)
-    fetchAll().then((results) => {
+    fetchAll(showSynthetic).then((results) => {
       const ok = results.filter(
         (r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled',
       ).length
@@ -55,7 +56,7 @@ export default function StubblePlumePage() {
       if (ok === 0) setError('Failed to load fire data')
       setLoading(false)
     })
-  }, [])
+  }, [showSynthetic])
 
   useEffect(() => { load() }, [load])
 
@@ -104,12 +105,18 @@ export default function StubblePlumePage() {
               <div className="space-y-2 text-sm text-slate-600">
                 <p>This module estimates regional fire-plume transport risk based on:</p>
                 <ul className="list-inside list-disc space-y-1">
-                  <li>NASA FIRMS active-fire hotspot locations</li>
+                  <li>Live NASA FIRMS active-fire hotspots (real observations only)</li>
                   <li>Fire Radiative Power (FRP) intensity</li>
                   <li>Wind direction and speed alignment</li>
                   <li>Distance from Delhi NCR</li>
                   <li>Atmospheric dispersion conditions</li>
                 </ul>
+                {fire?.region === 'NCR periphery' && (
+                  <p className="text-xs text-slate-500">
+                    Simulated (2023–24 synthetic) fire history is never used in these metrics; maps may show
+                    it only as a clearly-labelled grey overlay when toggled on.
+                  </p>
+                )}
                 <p className="mt-3 text-amber-800">
                   Note: this is an estimated transport-risk indicator derived from satellite
                   hotspots + NWP winds — not a full regional chemical-transport simulation.
@@ -124,12 +131,25 @@ export default function StubblePlumePage() {
           </div>
 
           <div className="card overflow-hidden p-0">
-            <div className="flex items-center gap-2 px-6 pt-5">
-              <Flame className="h-4 w-4 text-orange-600" aria-hidden="true" />
-              <h2 className="text-base font-bold text-slate-900">Active hotspot map</h2>
-              <span className="ml-auto text-xs text-slate-500">
-                circle size/colour = FRP · dashed line = estimated advective pathway to Delhi
-              </span>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-6 pt-5">
+              <div className="flex items-center gap-2">
+                <Flame className="h-4 w-4 text-orange-600" aria-hidden="true" />
+                <h2 className="text-base font-bold text-slate-900">Active hotspot map</h2>
+              </div>
+              <label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={showSynthetic}
+                  onChange={(e) => setShowSynthetic(e.target.checked)}
+                  className="h-3.5 w-3.5"
+                />
+                Show simulated (2023–24 synthetic history) overlay
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 pt-2 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 bg-red-500" aria-hidden="true" /> live FIRMS hotspot (circle size/colour = FRP)</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded-full border border-dashed border-slate-400 bg-slate-200" aria-hidden="true" /> simulated hotspot (not a live detection)</span>
+              <span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-4 border-t-2 border-dashed border-amber-700" aria-hidden="true" /> estimated advective pathway to Delhi</span>
             </div>
             <div className="p-3">
               {hotspots.length ? (

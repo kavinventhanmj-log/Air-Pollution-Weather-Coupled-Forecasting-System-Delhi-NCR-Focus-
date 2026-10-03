@@ -113,6 +113,7 @@ def generate_fires_for_date(day: datetime.date, total_budget: int) -> list[dict]
             "daynight": "D",
             "satellite": RNG.choice(["Aqua", "Terra"]),
             "synthetic": True,
+            "source": "synthetic_sim",
         })
     return records
 
@@ -168,7 +169,7 @@ def main():
     combined.to_csv(out_path, index=False)
     print(f"Saved {len(combined):,} total records -> {out_path}")
     print(f"  Date range: {combined['acq_date'].min()} to {combined['acq_date'].max()}")
-    print("  Synthetic records flagged with column 'synthetic'=True")
+    print("  Synthetic records flagged with column 'synthetic'=True and source='synthetic_sim'")
 
 
 if __name__ == "__main__":

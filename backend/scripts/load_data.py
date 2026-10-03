@@ -157,6 +157,14 @@ def load_coupled_data(db, csv_path: Path, chunksize: int = 25_000) -> dict:
 
 
 def load_fire_data(db, fire_csv: Path, chunksize: int = 50_000) -> int:
+    """Load the fire CSV into ``FireReading``, preserving provenance.
+
+    The CSV carries simulated stubble-fire history (``synthetic=1.0`` /
+    ``source=synthetic_sim``) plus real FIRMS rows. Both are stored with their
+    provenance so no simulated observation is ever presented as a live FIRMS
+    detection: simulated rows are stamped ``synthetic=True`` and real rows
+    ``synthetic=False`` (source ``firms_csv`` unless the CSV says otherwise).
+    """
     if not fire_csv.exists():
         return 0
     from backend.app.models.db_models import FireReading
@@ -185,8 +193,12 @@ def load_fire_data(db, fire_csv: Path, chunksize: int = 50_000) -> int:
         lat = pd.to_numeric(df.get("latitude"), errors="coerce")
         lon = pd.to_numeric(df.get("longitude"), errors="coerce")
 
+        synthetic = _col(df, "synthetic")
+        source = _col(df, "source")
+        bright = _col(df, "bright_ti4", _col(df, "bright_t31"))
+
         payloads = []
-        for ax, ny, ts, conf, frp_v, sat, dn in zip(
+        for ax, ny, ts, conf, frp_v, sat, dn, syn_v, src_v, br in zip(
             lat,
             lon,
             dt,
@@ -194,12 +206,16 @@ def load_fire_data(db, fire_csv: Path, chunksize: int = 50_000) -> int:
             df.get("frp"),
             df.get("satellite", pd.Series(dtype="str")),
             df.get("daynight", pd.Series(dtype="str")),
+            synthetic,
+            source,
+            bright,
             strict=True,
         ):
             key = (_clean(ax), _clean(ny))
             if key[0] is None or key[1] is None or key in existing:
                 continue
             ts_v = None if pd.isna(ts) else ts
+            syn_flag = _as_bool(syn_v)
             payloads.append({
                 "latitude": key[0],
                 "longitude": key[1],
@@ -207,7 +223,11 @@ def load_fire_data(db, fire_csv: Path, chunksize: int = 50_000) -> int:
                 "confidence": "" if conf is None else str(conf),
                 "frp": _clean(frp_v),
                 "satellite": _clean(sat),
+                "brightness": _clean(br),
+                "instrument": _instrument_for_satellite(_clean(sat)),
                 "daynight": _clean(dn),
+                "synthetic": syn_flag,
+                "source": _clean(src_v) or ("synthetic_sim" if syn_flag else "firms_csv"),
             })
             existing.add(key)
 
@@ -326,6 +346,31 @@ def _clean(v):
     if v is None or (isinstance(v, float) and v != v):
         return None
     return v
+
+
+def _col(df, name, fallback=None):
+    """Return a column, or a same-length single-value Series so zips align."""
+    if name in df.columns:
+        return df[name]
+    if fallback is not None:
+        return fallback
+    return pd.Series(None, dtype="object", index=df.index)
+
+
+def _as_bool(v) -> bool:
+    """Parse a CSV provenance flag ('1.0', '', True, 'true', ...) to a bool."""
+    if v is None or (isinstance(v, float) and v != v):
+        return False
+    return str(v).strip().lower() in {"1", "1.0", "true", "t", "yes", "y"}
+
+
+def _instrument_for_satellite(satellite: str | None) -> str | None:
+    """Infer the FIRMS instrument from the satellite when the CSV omits it."""
+    if not satellite:
+        return None
+    if satellite.strip() in {"Aqua", "Terra", "MODIS"}:
+        return "MODIS"
+    return "VIIRS"
 
 
 def _as_utc(ts):

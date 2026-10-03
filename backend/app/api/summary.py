@@ -104,7 +104,11 @@ def _build_summary(db: Session) -> object:
     # unlike the pollution archive), so it keeps its own window rather than
     # reusing the old pollution `since`.
     fires_since = now - timedelta(hours=24)
-    active_fires = db.query(FireReading).filter(FireReading.acq_date >= fires_since).count()
+    active_fires = (
+        db.query(FireReading)
+        .filter(FireReading.acq_date >= fires_since, FireReading.synthetic.is_(False))
+        .count()
+    )
     open_alerts = len(alert_service.all_station_alerts(db))
     models_trained = db.query(ModelMetrics).count()
 

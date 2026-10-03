@@ -1005,10 +1005,11 @@ def build_features_from_db_with_meta(db: Session, station_id: int) -> tuple[dict
     eng = add_inversion_features(eng)
     eng = add_lapse_rate_inversion_features(eng)
 
-    # Real fire features from the FIRMS records stored in the DB
+    # Real fire features from the FIRMS records stored in the DB (synthetic
+    # stubble-fire history is excluded from operational forecasts).
     from ..models.db_models import FireReading
 
-    fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(2000).all()
+    fires = db.query(FireReading).filter(FireReading.synthetic.is_(False)).order_by(FireReading.acq_date.desc()).limit(2000).all()
     if fires:
         fires_df = pd.DataFrame(
             [
@@ -1328,7 +1329,13 @@ def get_weather_context(db, station_id: int) -> dict:
 def get_fire_context(db) -> dict:
     from ..models.db_models import FireReading
 
-    fires = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(500).all()
+    fires = (
+        db.query(FireReading)
+        .filter(FireReading.synthetic.is_(False))
+        .order_by(FireReading.acq_date.desc())
+        .limit(500)
+        .all()
+    )
     if not fires:
         return {"fire_count": 0}
     distances = [haversine_distance(28.6139, 77.2090, f.latitude, f.longitude) for f in fires]

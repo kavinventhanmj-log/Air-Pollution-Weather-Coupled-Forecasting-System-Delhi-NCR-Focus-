@@ -61,6 +61,14 @@ export default function StubblePlume({ data }: { data: PlumeRisk | null }) {
           )}
         </div>
       </div>
+      {data.fire_basis != null && (
+        <p className="mt-3 text-xs text-slate-500">
+          Basis: {data.fire_basis}
+          {data.synthetic_fire_count != null && data.synthetic_fire_count > 0
+            ? ` (includes ${data.synthetic_fire_count} synthetic hotspots to fill the model window — real detections only in the headline figures above)`
+            : ' — real FIRMS detections only'}
+        </p>
+      )}
     </div>
   )
 }

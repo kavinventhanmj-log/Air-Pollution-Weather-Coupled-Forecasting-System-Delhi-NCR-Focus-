@@ -275,7 +275,8 @@ export const getNCRForecast = (hours = 72) => get<Record<string, ForecastPoint[]
 export const getWeather = (station: string) => get<WeatherData>(`/weather/${station}`)
 export const getInversion = (station: string) => get<InversionData>(`/inversion/${station}`)
 export const getFireActivity = () => get<FireActivity>('/fire-activity')
-export const getFireHotspots = () => get<FireHotspotsResponse>('/fire/hotspots')
+export const getFireHotspots = (includeSynthetic = false) =>
+  get<FireHotspotsResponse>('/fire/hotspots', { params: includeSynthetic ? { include_synthetic: true } : {} })
 export const getPlumeRisk = () => get<PlumeRisk>('/plume-risk')
 export const getExplanation = (station: string) => get<Explanation>(`/explanation/${station}`)
 export const getForecastExplanation = (forecastId: number) =>

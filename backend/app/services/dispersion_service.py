@@ -172,7 +172,7 @@ def _initial_aqi_field(db: Session, horizon_hours: int) -> np.ndarray | None:
 
 def _fires_in_domain(db: Session, limit: int = 60) -> list:
     b = NCR_BOUNDS
-    rows = db.query(FireReading).order_by(FireReading.acq_date.desc()).limit(1000).all()
+    rows = db.query(FireReading).filter(FireReading.synthetic.is_(False)).order_by(FireReading.acq_date.desc()).limit(1000).all()
     fires = []
     for r in rows:
         if r.latitude is None or r.longitude is None:

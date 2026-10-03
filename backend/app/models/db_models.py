@@ -92,12 +92,21 @@ class WeatherReading(Base):
     )
 
 class FireReading(Base):
-    """A single NASA FIRMS active-fire observation (hotspot event).
+    """A single stored fire-hostspot observation (hotspot event).
 
     Stores the raw fire *observation* only — no attribution to pollution is
     implied here. ``acq_date`` is kept as naive-UTC (matching the weather
     convention) and the row key (satellite, latitude, longitude, acq_date)
     prevents duplicate ingestion of the same hotspot detection.
+
+    Provenance (SIH26082): ``synthetic`` marks rows that were *simulated* for
+    the 2023-2024 training history rather than observed by NASA FIRMS;
+    ``source`` names the origin — ``"synthetic_sim"`` (generated stubble-fire
+    history), ``"firms_csv"`` (real observations loaded from a FIRMS CSV
+    export), or ``"firms_live"`` (written from live FIRMS refresh). Legacy
+    rows default to ``synthetic=False``. Operational readers MUST exclude
+    synthetic rows unless the caller explicitly requests the simulated
+    overlay, so a simulated fire is never presented as a live FIRMS detection.
     """
     __tablename__ = "fire_readings"
     id = Column(Integer, primary_key=True, index=True)
@@ -110,6 +119,8 @@ class FireReading(Base):
     frp = Column(Float)
     brightness = Column(Float)
     daynight = Column(String)
+    synthetic = Column(Boolean, nullable=False, default=False)
+    source = Column(String)
     __table_args__ = (
         UniqueConstraint("satellite", "latitude", "longitude", "acq_date", name="uq_fire_lat_lon_time"),
         Index("idx_fire_lat_lon_time", "latitude", "longitude", "acq_date"),

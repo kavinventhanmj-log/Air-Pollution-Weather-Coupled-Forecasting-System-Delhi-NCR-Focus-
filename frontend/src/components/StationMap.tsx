@@ -149,7 +149,7 @@ export default function StationMap({ stations, onSelectStation, fires = [], poll
           pathOptions={{ color: '#b45309', weight: 1.5, dashArray: '6 6', opacity: 0.7 }}
         />
       ))}
-      {fires.map((f, i) => (
+      {fires.filter((f) => !f.synthetic).map((f, i) => (
         <CircleMarker
           key={`${f.lat}-${f.lon}-${i}`}
           center={[f.lat, f.lon]}
@@ -158,18 +158,37 @@ export default function StationMap({ stations, onSelectStation, fires = [], poll
         >
           <Popup>
             <div className="text-xs">
-              <p className="font-bold">FIRMS Hotspot</p>
+              <p className="font-bold">Live FIRMS Hotspot</p>
               <p>FRP: {f.frp?.toFixed(1) ?? '--'} MW</p>
               <p>Confidence: {f.confidence ?? '--'}</p>
               {pathwayOrigins.has(keyOf(f.lat, f.lon)) && (
                 <p className="text-amber-700">Winds would advect this smoke toward Delhi NCR (estimate)</p>
               )}
               {f.acq_date && <p>{String(f.acq_date).slice(0, 16)}</p>}
+              {f.source && <p className="text-slate-500">source: {f.source}</p>}
             </div>
           </Popup>
         </CircleMarker>
       ))}
-      {fires.map((f, i) => {
+      {fires.filter((f) => f.synthetic).map((f, i) => (
+        <CircleMarker
+          key={`syn-${f.lat}-${f.lon}-${i}`}
+          center={[f.lat, f.lon]}
+          pathOptions={{ color: '#9ca3af', weight: 1, dashArray: '3 3', fillColor: '#d1d5db', fillOpacity: 0.5 }}
+          radius={frpRadius(f.frp)}
+        >
+          <Popup>
+            <div className="text-xs">
+              <p className="font-bold text-slate-600">Simulated hotspot (not a live detection)</p>
+              <p>FRP: {f.frp?.toFixed(1) ?? '--'} MW</p>
+              <p>2023–24 synthetic training history — shown only because the simulated overlay is enabled.</p>
+              {f.acq_date && <p>{String(f.acq_date).slice(0, 10)}</p>}
+              {f.source && <p className="text-slate-500">source: {f.source}</p>}
+            </div>
+          </Popup>
+        </CircleMarker>
+      ))}
+      {fires.filter((f) => !f.synthetic).map((f, i) => {
         if (!pathwayOrigins.has(keyOf(f.lat, f.lon))) return null
         return (
           <CircleMarker

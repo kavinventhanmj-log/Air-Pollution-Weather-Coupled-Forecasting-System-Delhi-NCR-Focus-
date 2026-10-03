@@ -13,7 +13,9 @@ Two fetch paths (both official NASA FIRMS data):
   MODIS C6), which need no key and still return real, current observations.
 
 No synthetic data is ever synthesised here: every stored row is a FIRMS
-detection. This module only describes *what was observed*; it makes no
+detection, stamped ``synthetic=False`` / ``source="firms_live"`` so
+operational readers can always tell real observations from simulated
+history. This module only describes *what was observed*; it makes no
 assertion that any given fire caused or contributed to Delhi pollution.
 """
 
@@ -142,7 +144,8 @@ def normalise_fire_records(df: pd.DataFrame) -> list[dict]:
     """Validate + normalise raw FIRMS rows into insert-ready dicts.
 
     Returns records with keys: satellite, instrument, latitude, longitude,
-    acq_date (naive-UTC datetime), confidence, frp, brightness, daynight.
+    acq_date (naive-UTC datetime), confidence, frp, brightness, daynight,
+    synthetic (False), source ("firms_live").
     Invalid rows (bad coordinates / undecodable time / outside region) are
     dropped and counted in the log, not silently stored.
     """
@@ -178,6 +181,8 @@ def normalise_fire_records(df: pd.DataFrame) -> list[dict]:
                 "frp": _to_float(row.get("frp")),
                 "brightness": _normalise_brightness(row),
                 "daynight": str(row.get("daynight") or "").strip(),
+                "synthetic": False,
+                "source": "firms_live",
             }
         )
     if dropped:
@@ -322,6 +327,8 @@ def upsert_fire_records(db, records: list[dict], dry_run: bool = False) -> dict:
                 frp=rec["frp"],
                 brightness=rec["brightness"],
                 daynight=rec["daynight"] or None,
+                synthetic=bool(rec.get("synthetic", False)),
+                source=rec.get("source") or "firms_live",
             )
         )
 

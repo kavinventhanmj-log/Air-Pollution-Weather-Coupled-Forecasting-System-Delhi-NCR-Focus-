@@ -95,7 +95,7 @@ const METHODS = [
   },
   {
     title: 'Fire / stubble influence',
-    body: 'FIRMS detections ≤ 500 km, upwind ±90° of transport direction; FRP-weighted impact; transport time = nearest distance ÷ wind speed; transport-risk weighting (0.4/0.3/0.2/0.1); stubble-impact score. Wording is "estimated fire-related transport influence".',
+    body: 'Live FIRMS detections ≤ 500 km, upwind ±90° of transport direction; FRP-weighted impact; transport time = nearest distance ÷ wind speed; transport-risk weighting (0.4/0.3/0.2/0.1); stubble-impact score. Only real FIRMS observations feed these metrics. Rows marked synthetic are 2023–24 simulated training history (clearly labelled, excluded from all operational metrics; visible at most as a grey "simulated" map overlay when explicitly toggled on). Wording is "estimated fire-related transport influence".',
   },
   {
     title: 'Uncertainty & validation',

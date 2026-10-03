@@ -275,6 +275,8 @@ export interface FireHotspot {
   frp?: number | null
   confidence?: string | null
   acq_date?: string | null
+  synthetic?: boolean
+  source?: string | null
 }
 
 export interface FireHotspotsResponse {
@@ -297,6 +299,8 @@ export interface PlumeRisk {
   transport_risk_level?: string | null
   stubble_impact_score?: number | null
   estimated_pm25_contribution_ugm3?: number | null
+  synthetic_fire_count?: number | null
+  fire_basis?: string | null
 }
 
 export interface PollutionEventFactor {

@@ -350,6 +350,13 @@ def _data_quality_report():
                 if nulls:
                     recommendations.append(f"{name}.{col} has {nulls} missing value(s) out of {total} row(s)")
             tables_report[name] = {"total": total, "missing_values": missing}
+            if name == "fire_readings":
+                tables_report[name]["synthetic"] = (
+                    db.query(FireReading).filter(FireReading.synthetic.is_(True)).count()
+                )
+                tables_report[name]["real"] = (
+                    db.query(FireReading).filter(FireReading.synthetic.is_(False)).count()
+                )
 
         stations = db.query(Station).order_by(Station.name).all()
         forecast_coverage = {}
@@ -362,7 +369,11 @@ def _data_quality_report():
 
         latest_pollution = db.query(func.max(PollutionReading.timestamp)).scalar()
         latest_weather = db.query(func.max(WeatherReading.timestamp)).scalar()
-        latest_fire = db.query(func.max(FireReading.acq_date)).scalar()
+        latest_fire = (
+            db.query(func.max(FireReading.acq_date))
+            .filter(FireReading.synthetic.is_(False))
+            .scalar()
+        )
 
         return {
             "status": "ok",

@@ -148,7 +148,11 @@ def _query_fires(db, since, until) -> pd.DataFrame:
     """Read stored fires (trailing window) — SELECT only, never writes."""
     from ..models.db_models import FireReading
 
-    rows = db.query(FireReading).filter(FireReading.acq_date >= since, FireReading.acq_date <= until).all()
+    rows = db.query(FireReading).filter(
+        FireReading.acq_date >= since,
+        FireReading.acq_date <= until,
+        FireReading.synthetic.is_(False),
+    ).all()
     return pd.DataFrame([{"lat": r.latitude, "lon": r.longitude, "acq_date": r.acq_date, "frp": r.frp} for r in rows])
 
 

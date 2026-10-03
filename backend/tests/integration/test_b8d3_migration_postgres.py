@@ -39,7 +39,10 @@ pytestmark = pytest.mark.skipif(
     reason="needs a PostgreSQL DATABASE_URL; CI's migrations job provides one",
 )
 
-HEAD = "b8d3f1a9c4e2"
+# The chain now extends to the fire-provenance revision; these tests still
+# verify every behaviour b8d3 introduced, but the sprint to head must land on
+# the current terminus.
+HEAD = "c5d7e9f1a3b0"
 
 
 @pytest.fixture(scope="session")

@@ -424,6 +424,14 @@ def _run_revision(engine, *, with_alerts):
             "CREATE TABLE forecasts (id INTEGER PRIMARY KEY, station_id INTEGER, "
             "horizon_hours INTEGER NOT NULL, generated_at DATETIME, pm25_pred FLOAT)"
         ))
+        # fire_readings already exists at the stamp revision; the chain's two
+        # head revisions touch it (unique index in b8d3, provenance columns in
+        # the fire-provenance revision), so the fixture models it too.
+        c.execute(sa.text(
+            "CREATE TABLE fire_readings (id INTEGER PRIMARY KEY, satellite VARCHAR, "
+            "latitude FLOAT NOT NULL, longitude FLOAT NOT NULL, acq_date DATETIME NOT NULL, "
+            "confidence VARCHAR, frp FLOAT)"
+        ))
         if with_alerts:
             c.execute(sa.text(
                 "CREATE TABLE alerts (id INTEGER PRIMARY KEY, station_id INTEGER NOT NULL, "
@@ -456,16 +464,18 @@ def _count(engine, table, where=""):
 
 
 def test_head_revision_upgrades_cleanly_on_sqlite(fresh_db):
-    """The SQLite branch of b8d3f1a9c4e2 must work, not just PostgreSQL's."""
+    """The SQLite branch of the head revision must work."""
     _run_revision(fresh_db, with_alerts=True)
 
     with fresh_db.connect() as c:
         assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == (
-            "b8d3f1a9c4e2"
+            "c5d7e9f1a3b0"
         )
         assert "re_stamped" in {
             r[1] for r in c.execute(sa.text("PRAGMA table_info(pollution_observations)"))
         }
+        fire_cols = {r[1] for r in c.execute(sa.text("PRAGMA table_info(fire_readings)"))}
+        assert {"synthetic", "source"} <= fire_cols
     assert "forecast_runs" in sa.inspect(fresh_db).get_table_names()
 
 
@@ -510,7 +520,7 @@ def test_head_revision_skips_a_missing_alerts_table_on_sqlite(fresh_db):
 
     with fresh_db.connect() as c:
         assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == (
-            "b8d3f1a9c4e2"
+            "c5d7e9f1a3b0"
         )
     assert "alerts" not in sa.inspect(fresh_db).get_table_names()
     # The tables that do exist were still repaired.
