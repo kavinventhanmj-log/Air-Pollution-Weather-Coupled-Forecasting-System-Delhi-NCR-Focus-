@@ -5,6 +5,38 @@ import { useAuth } from '../auth/AuthContext'
 import { isTransientStatus, getDemoCredentials, resilientGet } from '../api/client'
 import type { DemoCredentials } from '../types'
 
+// Edge-served copy of the demo credential, written at build time by
+// `scripts/generate-demo-credentials.mjs`. Vercel serves the built bundle from
+// its own CDN, so reading this costs a same-origin request in milliseconds,
+// whereas `/api/auth/demo` only answers once the Render free-tier container is
+// serving -- measured at 83,397 ms cold against 435 ms warm, because the
+// keepalive cron meant to hold it awake runs on a median 260 min cadence
+// against an intended 5 min. A plain `fetch` is used rather than the axios
+// instance: this is a static asset, not an API call, so it must not be queued
+// behind the shared warm-up gate or rewritten by the `/api/:path*` proxy.
+const DEMO_MANIFEST_URL = '/demo-credentials.json'
+
+async function readDemoManifest(signal: AbortSignal): Promise<DemoCredentials | null> {
+  try {
+    const res = await fetch(DEMO_MANIFEST_URL, { signal, cache: 'no-store' })
+    if (!res.ok) return null
+    const data = await res.json()
+    if (data?.enabled !== true) return null
+    if (typeof data.email !== 'string' || typeof data.password !== 'string') return null
+    return {
+      email: data.email,
+      password: data.password,
+      name: typeof data.name === 'string' ? data.name : '',
+      role: typeof data.role === 'string' ? data.role : '',
+    }
+  } catch {
+    // No manifest, or one that is not JSON: `vercel.json` rewrites unmatched
+    // paths to /index.html, so an absent file arrives as HTML with a 200 and
+    // `res.json()` throws. Either way the endpoint below is still authoritative.
+    return null
+  }
+}
+
 export default function LoginPage() {
   const { user, token, login } = useAuth()
   const navigate = useNavigate()
@@ -29,25 +61,43 @@ export default function LoginPage() {
 
   useEffect(() => {
     let cancelled = false
-    // Retry through the cold-start window instead of fetching once.
-    //
-    // A single fire-and-forget request made the demo button's visibility
-    // depend on whether the backend happened to be awake: one transient 502/503
-    // during a Render wake left `demo` null for the rest of the page's life, so
-    // the button never appeared and the demo looked broken. `resilientGet`
-    // waits on the shared warm-up gate and retries, and still lets a genuine
-    // 404 (demo disabled) through immediately, so the credential stays hidden
-    // in production exactly as before.
-    resilientGet(getDemoCredentials)
-      .then((res) => {
+    const controller = new AbortController()
+
+    // Prefer the edge-served manifest, and only fall back to the endpoint when
+    // it carries no credential. That keeps the demo affordance visible on the
+    // first paint instead of after a cold start, while `/api/auth/demo` stays
+    // authoritative: a deployment without the manifest, or one that writes
+    // `{"enabled": false}`, still resolves through the endpoint exactly as
+    // before, so switching the demo off on the backend still hides the button.
+    void (async () => {
+      const fromManifest = await readDemoManifest(controller.signal)
+      if (cancelled) return
+      if (fromManifest) {
+        setDemo(fromManifest)
+        return
+      }
+
+      // Retry through the cold-start window instead of fetching once.
+      //
+      // A single fire-and-forget request made the demo button's visibility
+      // depend on whether the backend happened to be awake: one transient 502/503
+      // during a Render wake left `demo` null for the rest of the page's life, so
+      // the button never appeared and the demo looked broken. `resilientGet`
+      // waits on the shared warm-up gate and retries, and still lets a genuine
+      // 404 (demo disabled) through immediately, so the credential stays hidden
+      // in production exactly as before.
+      try {
+        const res = await resilientGet(getDemoCredentials)
         if (!cancelled) setDemo(res.data)
-      })
-      .catch(() => {
+      } catch {
         // 404 (demo disabled) or a genuinely unavailable backend: keep the demo
         // affordance hidden. Manual sign-in always remains available.
-      })
+      }
+    })()
+
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [])
 
