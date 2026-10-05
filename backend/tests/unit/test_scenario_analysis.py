@@ -321,11 +321,12 @@ WIND_CHANGE = {"wind_speed": {"mode": "relative", "value": 2.0}}
 
 
 class TestScenarioApi:
-    def test_post_scenario_analysis_for_named_station(self, client, db_session, monkeypatch):
+    def test_post_scenario_analysis_for_named_station(self, client, db_session, monkeypatch, auth_headers):
         install_fake_forecaster(monkeypatch)
         resp = client.post(
             "/api/scenario/analysis",
             json={"station_name": "Anand Vihar", "hours": 12, "changes": WIND_CHANGE},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -339,47 +340,52 @@ class TestScenarioApi:
         first = body["difference"]["points"][0]
         assert first["baseline_pm25"] and first["scenario_pm25"] and first["difference_pm25"]
 
-    def test_post_scenario_defaults_to_first_station(self, client, db_session, monkeypatch):
+    def test_post_scenario_defaults_to_first_station(self, client, db_session, monkeypatch, auth_headers):
         install_fake_forecaster(monkeypatch)
         resp = client.post(
             "/api/scenario/analysis",
             json={"hours": 12, "changes": {"pbl_height": {"mode": "absolute", "value": 400.0}}},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["station"] == "Anand Vihar"
 
-    def test_unknown_station_returns_404(self, client, db_session, monkeypatch):
+    def test_unknown_station_returns_404(self, client, db_session, monkeypatch, auth_headers):
         install_fake_forecaster(monkeypatch)
         resp = client.post(
             "/api/scenario/analysis",
             json={"station_name": "No Such Station", "hours": 12, "changes": WIND_CHANGE},
+            headers=auth_headers,
         )
         assert resp.status_code == 404
 
-    def test_empty_changes_returns_422(self, client, db_session, monkeypatch):
+    def test_empty_changes_returns_422(self, client, db_session, monkeypatch, auth_headers):
         install_fake_forecaster(monkeypatch)
         resp = client.post(
             "/api/scenario/analysis",
             json={"station_name": "Anand Vihar", "hours": 12, "changes": {}},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
         assert "no_input_changes" in resp.json()["detail"]
 
-    def test_invalid_change_mode_returns_422(self, client, db_session):
+    def test_invalid_change_mode_returns_422(self, client, db_session, auth_headers):
         resp = client.post(
             "/api/scenario/analysis",
             json={"changes": {"wind_speed": {"mode": "bogus", "value": 3.0}}},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
 
-    def test_hours_out_of_range_returns_422(self, client, db_session):
+    def test_hours_out_of_range_returns_422(self, client, db_session, auth_headers):
         resp = client.post(
             "/api/scenario/analysis",
             json={"hours": 0, "changes": WIND_CHANGE},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
 
-    def test_unavailable_models_return_503(self, client, db_session, monkeypatch):
+    def test_unavailable_models_return_503(self, client, db_session, monkeypatch, auth_headers):
         class Unavailable(FakeForecaster):
             is_available = False
 
@@ -387,6 +393,7 @@ class TestScenarioApi:
         resp = client.post(
             "/api/scenario/analysis",
             json={"station_name": "Anand Vihar", "hours": 12, "changes": WIND_CHANGE},
+            headers=auth_headers,
         )
         assert resp.status_code == 503
         assert "not trained" in resp.json()["detail"]

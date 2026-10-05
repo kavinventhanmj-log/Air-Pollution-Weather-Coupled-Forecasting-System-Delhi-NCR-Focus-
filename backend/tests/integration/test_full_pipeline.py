@@ -9,8 +9,8 @@ from app.database import DEFAULT_STATIONS
 
 
 class TestForecastPipeline:
-    def test_forecast_generate_to_api(self, client, db_session):
-        resp = client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    def test_forecast_generate_to_api(self, client, db_session, auth_headers):
+        resp = client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["station"] == "Anand Vihar"
@@ -21,8 +21,8 @@ class TestForecastPipeline:
             assert f["aqi_pred"] > 0
             assert f["aqi_category"] in {"Good", "Satisfactory", "Moderate", "Poor", "Very Poor", "Severe"}
 
-    def test_forecast_persists_to_db(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    def test_forecast_persists_to_db(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         resp = client.get("/api/forecast/Anand Vihar")
         assert resp.status_code == 200
         forecasts = resp.json()
@@ -34,16 +34,16 @@ class TestForecastPipeline:
         assert set(horizons) == set(range(1, 13)) | {24, 48, 72}
         assert 1 in horizons or 6 in horizons
 
-    def test_regeneration_does_not_duplicate_rows(self, client, db_session):
+    def test_regeneration_does_not_duplicate_rows(self, client, db_session, auth_headers):
         """A second generation must replace, not accumulate (upsert contract)."""
         first = client.post(
-            "/api/forecast/generate", json={"station_name": "Anand Vihar"}
+            "/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers
         )
         assert first.status_code == 200, first.text
         count_after_first = len(client.get("/api/forecast/Anand Vihar").json())
 
         second = client.post(
-            "/api/forecast/generate", json={"station_name": "Anand Vihar"}
+            "/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers
         )
         assert second.status_code == 200, second.text
         rows = client.get("/api/forecast/Anand Vihar").json()
@@ -158,11 +158,11 @@ class TestExplainability:
 
 
 class TestAlerts:
-    def test_alerts_generated_from_forecast(self, client, db_session):
+    def test_alerts_generated_from_forecast(self, client, db_session, auth_headers):
         """The served feed is derived from the current forecast state, so a fresh
         generation for a station must be reflected without the caller reloading
         a persisted snapshot."""
-        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         body = client.get("/api/alerts").json()
         assert body, "expected alerts for the regenerated station"
         assert "Anand Vihar" in {a["station"] for a in body}
@@ -189,13 +189,13 @@ class TestModelMetricsAPI:
             assert m["pollutant"] in {"pm25", "pm10"}
             assert m["mae"] > 0
 
-    def test_metrics_save_and_retrieve(self, client, db_session):
+    def test_metrics_save_and_retrieve(self, client, db_session, auth_headers):
         payload = {
             "model_name": "xgboost", "pollutant": "o3",
             "horizon_hours": 24, "mae": 7.5, "rmse": 11.0,
             "r2": 0.88, "mape": 9.5,
         }
-        resp = client.post("/api/model/metrics", json=payload)
+        resp = client.post("/api/model/metrics", json=payload, headers=auth_headers)
         assert resp.status_code == 201
         fetched = client.get("/api/model/metrics").json()
         assert any(m["pollutant"] == "o3" and m["horizon_hours"] == 24 for m in fetched)
@@ -250,10 +250,11 @@ class TestCouplingFeedback:
 
 
 class TestCoupledForecastLoop:
-    def test_coupled_forecast_endpoint(self, client, db_session):
+    def test_coupled_forecast_endpoint(self, client, db_session, auth_headers):
         resp = client.post(
             "/api/forecast/coupled",
             json={"station_name": "Anand Vihar", "horizons": [1, 6, 12, 24, 48, 72]},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -267,10 +268,11 @@ class TestCoupledForecastLoop:
             assert "coupling" in point
             assert point["coupling_stability"] is not None
 
-    def test_coupled_vs_uncoupled_shapes(self, client, db_session):
+    def test_coupled_vs_uncoupled_shapes(self, client, db_session, auth_headers):
         resp = client.post(
             "/api/forecast/coupled",
             json={"station_name": "ITO", "horizons": [24, 72]},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -280,10 +282,11 @@ class TestCoupledForecastLoop:
         assert uncoupled_ts == [24, 72]
         assert len(body["feedback_path"]) == 72
 
-    def test_six_pollutants_present_in_coupled(self, client, db_session):
+    def test_six_pollutants_present_in_coupled(self, client, db_session, auth_headers):
         resp = client.post(
             "/api/forecast/coupled",
             json={"station_name": "Dwarka", "horizons": [6]},
+            headers=auth_headers,
         )
         assert resp.status_code == 200
         point = resp.json()["coupled"][0]
@@ -293,8 +296,8 @@ class TestCoupledForecastLoop:
 
 
 class TestGridForecast:
-    def test_grid_forecast_endpoint(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    def test_grid_forecast_endpoint(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         resp = client.get("/api/grid/forecast?horizon_hours=24")
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -303,8 +306,8 @@ class TestGridForecast:
         assert "cells" in body
         assert body["extent"]["lats_min"] <= body["extent"]["lats_max"]
 
-    def test_grid_overview(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    def test_grid_overview(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         resp = client.get("/api/grid/overview")
         assert resp.status_code == 200
         body = resp.json()
@@ -313,8 +316,8 @@ class TestGridForecast:
 
 
 class TestForecastCompletePollutantSet:
-    def test_direct_forecast_includes_so2_co(self, client, db_session):
-        resp = client.post("/api/forecast/generate", json={"station_name": "RK Puram"})
+    def test_direct_forecast_includes_so2_co(self, client, db_session, auth_headers):
+        resp = client.post("/api/forecast/generate", json={"station_name": "RK Puram"}, headers=auth_headers)
         assert resp.status_code == 200
         f = resp.json()["forecasts"][0]
         assert "so2_pred" in f and "co_pred" in f
@@ -323,8 +326,8 @@ class TestForecastCompletePollutantSet:
 
 
 class TestDispersionForecast:
-    def test_dispersion_forecast_endpoint(self, client, db_session):
-        client.post("/api/forecast/coupled", json={"station_name": "Anand Vihar", "horizons": [1, 6, 12, 24, 48, 72]})
+    def test_dispersion_forecast_endpoint(self, client, db_session, auth_headers):
+        client.post("/api/forecast/coupled", json={"station_name": "Anand Vihar", "horizons": [1, 6, 12, 24, 48, 72]}, headers=auth_headers)
         resp = client.get("/api/dispersion/forecast?horizon_hours=24&start_hour=8")
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -347,8 +350,8 @@ class TestDispersionForecast:
         assert body["frames"] == []
         assert "error" in body
 
-    def test_dispersion_forecast_72h_evolution(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Dwarka"})
+    def test_dispersion_forecast_72h_evolution(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Dwarka"}, headers=auth_headers)
         resp = client.get("/api/dispersion/forecast?horizon_hours=72&start_hour=23")
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -360,7 +363,7 @@ class TestDispersionForecast:
         assert hours_of_day  # diurnal cycle present
         assert all(0 <= h <= 23 for h in hours_of_day)
 
-    def test_dispersion_frame_hours_subset(self, client, db_session):
+    def test_dispersion_frame_hours_subset(self, client, db_session, auth_headers):
         """`?frame_hours=` must shrink the payload without changing the run.
 
         The 72 h response serialises 72 x 1575 per-cell grids, which is what
@@ -368,7 +371,7 @@ class TestDispersionForecast:
         return exactly those frames, keep full cell fidelity on them, and still
         advertise the complete hour list.
         """
-        client.post("/api/forecast/generate", json={"station_name": "Dwarka"})
+        client.post("/api/forecast/generate", json={"station_name": "Dwarka"}, headers=auth_headers)
         full = client.get("/api/dispersion/forecast?horizon_hours=72&start_hour=8")
         assert full.status_code == 200, full.text
         subset = client.get(
@@ -387,8 +390,8 @@ class TestDispersionForecast:
             assert frame["aqi_mean"] == by_hour_full[frame["hour"]]["aqi_mean"]
         assert len(subset.content) < len(full.content)
 
-    def test_dispersion_frame_hours_malformed_falls_back_to_all(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Dwarka"})
+    def test_dispersion_frame_hours_malformed_falls_back_to_all(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Dwarka"}, headers=auth_headers)
         for raw in ("not-a-number", "-4", ""):
             resp = client.get(
                 f"/api/dispersion/forecast?horizon_hours=24&start_hour=8&frame_hours={raw}"
@@ -437,8 +440,8 @@ class TestSummaryEndpoint:
 
 
 class TestExportEndpoint:
-    def test_export_forecast_csv(self, client, db_session):
-        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    def test_export_forecast_csv(self, client, db_session, auth_headers):
+        client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
         resp = client.get("/api/export/forecast.csv", params={"station_name": "Anand Vihar", "hours": 72})
         assert resp.status_code == 200, resp.text
         assert resp.headers["content-type"].startswith("text/csv")

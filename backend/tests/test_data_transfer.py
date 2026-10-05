@@ -71,7 +71,7 @@ def test_export_unknown_station_404(client, db_session):
     assert response.status_code == 404
 
 
-def test_import_weather_inserts_and_is_idempotent(client, db_session):
+def test_import_weather_inserts_and_is_idempotent(client, db_session, auth_headers):
     payload = _weather_csv([
         {"station": "Anand Vihar", "time": _old_ts(30), "temperature_2m": "11.5", "relative_humidity_2m": "88",
          "pressure_msl": "1014.2", "surface_pressure": "994.0", "wind_speed_10m": "3.1",
@@ -84,7 +84,8 @@ def test_import_weather_inserts_and_is_idempotent(client, db_session):
          "wind_direction_10m": "180", "precipitation": "0.0", "cloud_cover": "10", "boundary_layer_height": "500"},
     ])
 
-    first = client.post("/api/import/weather", content=payload, headers={"Content-Type": "text/csv"})
+    first = client.post("/api/import/weather", content=payload,
+                        headers={"Content-Type": "text/csv", **auth_headers})
     assert first.status_code == 200, first.text
     summary = first.json()
     assert summary["dataset"] == "weather"
@@ -94,7 +95,8 @@ def test_import_weather_inserts_and_is_idempotent(client, db_session):
     assert summary["unchanged"] == 0
     assert summary["unknown_stations"] == []
 
-    second = client.post("/api/import/weather", content=payload, headers={"Content-Type": "text/csv"})
+    second = client.post("/api/import/weather", content=payload,
+                         headers={"Content-Type": "text/csv", **auth_headers})
     assert second.status_code == 200
     replayed = second.json()
     assert replayed["inserted"] == 0
@@ -105,7 +107,7 @@ def test_import_weather_inserts_and_is_idempotent(client, db_session):
     assert anand_count == 1
 
 
-def test_import_pollution_computes_aqi_and_respects_provided(client, db_session):
+def test_import_pollution_computes_aqi_and_respects_provided(client, db_session, auth_headers):
     payload = _pollution_csv([
         {"station": "Anand Vihar", "timestamp": _old_ts(30), "pm25": "120", "pm10": "220", "o3": "60",
          "no2": "90", "so2": "18", "co": "2.4", "aqi": None},
@@ -113,7 +115,8 @@ def test_import_pollution_computes_aqi_and_respects_provided(client, db_session)
          "so2": "", "co": "", "aqi": "199"},
     ])
 
-    first = client.post("/api/import/pollution", content=payload, headers={"Content-Type": "text/csv"})
+    first = client.post("/api/import/pollution", content=payload,
+                        headers={"Content-Type": "text/csv", **auth_headers})
     assert first.status_code == 200, first.text
     summary = first.json()
     assert summary["dataset"] == "pollution"
@@ -136,14 +139,15 @@ def test_import_pollution_computes_aqi_and_respects_provided(client, db_session)
     ).first()
     assert ipo is not None and ipo.aqi == 199  # provided value kept
 
-    second = client.post("/api/import/pollution", content=payload, headers={"Content-Type": "text/csv"})
+    second = client.post("/api/import/pollution", content=payload,
+                         headers={"Content-Type": "text/csv", **auth_headers})
     assert second.status_code == 200
     replayed = second.json()
     assert replayed["inserted"] == 0
     assert replayed["unchanged"] == 2
 
 
-def test_import_skips_unknown_stations(client, db_session):
+def test_import_skips_unknown_stations(client, db_session, auth_headers):
     payload = _weather_csv([
         {"station": "Seemapuri (not curated)", "time": _old_ts(10), "temperature_2m": "20",
          "relative_humidity_2m": "40", "pressure_msl": "", "surface_pressure": "",
@@ -152,7 +156,8 @@ def test_import_skips_unknown_stations(client, db_session):
          "pressure_msl": "", "surface_pressure": "", "wind_speed_10m": "", "wind_direction_10m": "",
          "precipitation": "", "cloud_cover": "", "boundary_layer_height": ""},
     ])
-    response = client.post("/api/import/weather", content=payload, headers={"Content-Type": "text/csv"})
+    response = client.post("/api/import/weather", content=payload,
+                          headers={"Content-Type": "text/csv", **auth_headers})
     assert response.status_code == 200
     summary = response.json()
     assert summary["inserted"] == 1
@@ -160,13 +165,14 @@ def test_import_skips_unknown_stations(client, db_session):
     assert summary["rows"] == 2
 
 
-def test_import_weather_bad_timestamp_reported(client, db_session):
+def test_import_weather_bad_timestamp_reported(client, db_session, auth_headers):
     payload = _weather_csv([
         {"station": "Anand Vihar", "time": "not-a-date", "temperature_2m": "20", "relative_humidity_2m": "40",
          "pressure_msl": "", "surface_pressure": "", "wind_speed_10m": "", "wind_direction_10m": "",
          "precipitation": "", "cloud_cover": "", "boundary_layer_height": ""},
     ])
-    response = client.post("/api/import/weather", content=payload, headers={"Content-Type": "text/csv"})
+    response = client.post("/api/import/weather", content=payload,
+                          headers={"Content-Type": "text/csv", **auth_headers})
     assert response.status_code == 200
     summary = response.json()
     assert summary["inserted"] == 0
@@ -174,21 +180,23 @@ def test_import_weather_bad_timestamp_reported(client, db_session):
     assert "unparsable timestamp" in summary["errors"][0]
 
 
-def test_import_validation_errors(client, db_session):
+def test_import_validation_errors(client, db_session, auth_headers):
     no_station = client.post("/api/import/weather", content="time,temperature_2m\n2024-01-01 00:00:00,10",
-                             headers={"Content-Type": "text/csv"})
+                             headers={"Content-Type": "text/csv", **auth_headers})
     assert no_station.status_code == 400
     assert "station" in no_station.json()["detail"]
 
-    no_rows = client.post("/api/import/weather", content="station,time\n", headers={"Content-Type": "text/csv"})
+    no_rows = client.post("/api/import/weather", content="station,time\n",
+                          headers={"Content-Type": "text/csv", **auth_headers})
     assert no_rows.status_code == 400
     assert "no data rows" in no_rows.json()["detail"]
 
 
-def test_export_import_roundtrip_is_unchanged(client, db_session):
+def test_export_import_roundtrip_is_unchanged(client, db_session, auth_headers):
     exported = client.get("/api/export/weather.csv", params={"station_name": "Anand Vihar", "hours": 24})
     assert exported.status_code == 200
-    imported = client.post("/api/import/weather", content=exported.text, headers={"Content-Type": "text/csv"})
+    imported = client.post("/api/import/weather", content=exported.text,
+                           headers={"Content-Type": "text/csv", **auth_headers})
     assert imported.status_code == 200, imported.text
     summary = imported.json()
     assert summary["inserted"] == 0
@@ -197,7 +205,8 @@ def test_export_import_roundtrip_is_unchanged(client, db_session):
 
     pollution_export = client.get("/api/export/pollution.csv", params={"station_name": "Anand Vihar", "hours": 24})
     assert pollution_export.status_code == 200
-    reimport = client.post("/api/import/pollution", content=pollution_export.text, headers={"Content-Type": "text/csv"})
+    reimport = client.post("/api/import/pollution", content=pollution_export.text,
+                           headers={"Content-Type": "text/csv", **auth_headers})
     assert reimport.status_code == 200, reimport.text
     ps = reimport.json()
     assert ps["inserted"] == 0

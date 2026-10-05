@@ -154,6 +154,50 @@ def client():
         yield c
 
 
+#: Identity carried by the ``auth_headers`` token. Deliberately *not* the
+#: configured demo account and not a real ``users`` row - see the fixture.
+_TEST_TOKEN_USER_ID = 1
+_TEST_TOKEN_EMAIL = "pytest@aerocast.test"
+_TEST_TOKEN_NAME = "Pytest Caller"
+_TEST_TOKEN_ROLE = "tester"
+_TEST_TOKEN_EXPIRE_MINUTES = 10
+
+
+@pytest.fixture()
+def auth_headers():
+    """``Authorization`` headers holding a valid HS256 bearer token.
+
+    The write endpoints are authenticated, so ``get_current_user`` answers 401 to
+    an anonymous or malformed token. Any test exercising a protected endpoint's
+    success or validation path therefore has to present a token; this fixture is
+    the one place that mints one.
+
+    ``get_current_user`` resolves the profile from the signed ``name``/``role``/
+    ``email`` claims and only falls back to a ``users`` lookup for tokens minted
+    before those claims existed, so embedding them here means no user row is
+    needed and the ``users`` table is left untouched.
+
+    The email is intentionally unrelated to ``DEMO_USER_EMAIL``: ``get_current_user``
+    refuses tokens belonging to the demo account whenever ``demo_user_enabled``
+    is off, so reusing the demo identity would make these tests fail on an
+    unrelated deployment switch.
+
+    Anonymous and invalid-token 401 coverage lives in ``tests/test_auth.py``.
+    """
+    from app.config import get_settings
+    from app.security import create_access_token
+
+    token = create_access_token(
+        _TEST_TOKEN_USER_ID,
+        _TEST_TOKEN_EMAIL,
+        get_settings().secret_key,
+        expires_minutes=_TEST_TOKEN_EXPIRE_MINUTES,
+        name=_TEST_TOKEN_NAME,
+        role=_TEST_TOKEN_ROLE,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _calculate_current_aqi(pm25, pm10, o3, no2, so2, co):
     aqi, _, _ = calculate_aqi(pm25, pm10, o3, no2, so2, co)
     return aqi

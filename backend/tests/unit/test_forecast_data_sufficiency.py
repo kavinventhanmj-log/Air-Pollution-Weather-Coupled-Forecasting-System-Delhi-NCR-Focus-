@@ -143,13 +143,15 @@ class TestInsufficientDataRefusal:
 # ---------------------------------------------------------------------------
 
 class TestApiRefusalContract:
-    def test_generate_forecast_returns_503_for_an_empty_station(self, client, db_session):
+    def test_generate_forecast_returns_503_for_an_empty_station(self, client, db_session, auth_headers):
         station = _station(db_session)
         _wipe_station_data(db_session, station)
         before = db_session.query(Forecast).filter(Forecast.station_id == station.id).count()
 
         resp = client.post(
-            "/api/forecast/generate", json={"station_name": station.name, "horizons": [1, 24]}
+            "/api/forecast/generate",
+            json={"station_name": station.name, "horizons": [1, 24]},
+            headers=auth_headers,
         )
         assert resp.status_code == 503
         detail = resp.json()["detail"]
@@ -161,13 +163,15 @@ class TestApiRefusalContract:
         after = db_session.query(Forecast).filter(Forecast.station_id == station.id).count()
         assert after == before, "a refused forecast must never persist a row"
 
-    def test_coupled_endpoint_returns_503_for_an_empty_station(self, client, db_session):
+    def test_coupled_endpoint_returns_503_for_an_empty_station(self, client, db_session, auth_headers):
         station = _station(db_session)
         _wipe_station_data(db_session, station)
         before = db_session.query(Forecast).filter(Forecast.station_id == station.id).count()
 
         resp = client.post(
-            "/api/forecast/coupled", json={"station_name": station.name, "horizons": [1, 24]}
+            "/api/forecast/coupled",
+            json={"station_name": station.name, "horizons": [1, 24]},
+            headers=auth_headers,
         )
         assert resp.status_code == 503
         assert resp.json()["detail"]["code"] == "insufficient_data"
@@ -189,9 +193,11 @@ class TestApiRefusalContract:
 # ---------------------------------------------------------------------------
 
 class TestProvenance:
-    def test_provenance_present_on_a_successful_forecast(self, client, db_session):
+    def test_provenance_present_on_a_successful_forecast(self, client, db_session, auth_headers):
         resp = client.post(
-            "/api/forecast/generate", json={"station_name": "Anand Vihar", "horizons": [1, 24]}
+            "/api/forecast/generate",
+            json={"station_name": "Anand Vihar", "horizons": [1, 24]},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         prov = resp.json()["provenance"]
@@ -201,9 +207,11 @@ class TestProvenance:
         assert prov["observation_age_hours"] is not None
         assert prov["generated_at"]
 
-    def test_coupled_provenance_present(self, client, db_session):
+    def test_coupled_provenance_present(self, client, db_session, auth_headers):
         resp = client.post(
-            "/api/forecast/coupled", json={"station_name": "Anand Vihar", "horizons": [1, 6]}
+            "/api/forecast/coupled",
+            json={"station_name": "Anand Vihar", "horizons": [1, 6]},
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         prov = resp.json()["provenance"]

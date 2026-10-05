@@ -111,8 +111,8 @@ def test_get_forecast_ncr(client, db_session):
     assert isinstance(body["Anand Vihar"], list)
 
 
-def test_generate_forecast_default(client, db_session):
-    response = client.post("/api/forecast/generate")
+def test_generate_forecast_default(client, db_session, auth_headers):
+    response = client.post("/api/forecast/generate", headers=auth_headers)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["station"] == "Anand Vihar"
@@ -125,10 +125,11 @@ def test_generate_forecast_default(client, db_session):
         assert f["horizon_hours"] in body["horizons"]
 
 
-def test_generate_forecast_for_station(client, db_session):
+def test_generate_forecast_for_station(client, db_session, auth_headers):
     response = client.post(
         "/api/forecast/generate",
         json={"station_name": "Dwarka", "horizons": [3, 24]},
+        headers=auth_headers,
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -140,27 +141,27 @@ def test_generate_forecast_for_station(client, db_session):
     assert len(generated.json()) >= 2
 
 
-def test_generate_forecast_persists_alerts(client, db_session):
+def test_generate_forecast_persists_alerts(client, db_session, auth_headers):
     """``POST /api/forecast/generate`` still appends to the ``alerts`` table for
     audit history, even though the served feed is now evaluated live."""
     from app.database import SessionLocal
     from app.models.db_models import Alert
     with SessionLocal() as session:
         before = session.query(Alert).count()
-    client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"})
+    client.post("/api/forecast/generate", json={"station_name": "Anand Vihar"}, headers=auth_headers)
     with SessionLocal() as session:
         assert session.query(Alert).count() > before
 
 
-def test_generate_forecast_station_not_found(client, db_session):
-    response = client.post("/api/forecast/generate", json={"station_name": "Noida"})
+def test_generate_forecast_station_not_found(client, db_session, auth_headers):
+    response = client.post("/api/forecast/generate", json={"station_name": "Noida"}, headers=auth_headers)
     assert response.status_code == 404
 
 
-def test_generate_forecast_invalid_horizon(client, db_session):
-    response = client.post("/api/forecast/generate", json={"horizons": [100]})
+def test_generate_forecast_invalid_horizon(client, db_session, auth_headers):
+    response = client.post("/api/forecast/generate", json={"horizons": [100]}, headers=auth_headers)
     assert response.status_code == 400
-    response = client.post("/api/forecast/generate", json={"horizons": []})
+    response = client.post("/api/forecast/generate", json={"horizons": []}, headers=auth_headers)
     assert response.status_code == 400
 
 
@@ -441,7 +442,7 @@ def test_get_model_metrics(client, db_session):
         assert 0 < b["r2"] <= 1
 
 
-def test_save_model_metrics(client, db_session):
+def test_save_model_metrics(client, db_session, auth_headers):
     payload = {
         "model_name": "xgboost",
         "pollutant": "no2",
@@ -451,7 +452,7 @@ def test_save_model_metrics(client, db_session):
         "r2": 0.91,
         "mape": 11.3,
     }
-    response = client.post("/api/model/metrics", json=payload)
+    response = client.post("/api/model/metrics", json=payload, headers=auth_headers)
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["id"] is not None
@@ -463,10 +464,18 @@ def test_save_model_metrics(client, db_session):
     assert any(m["pollutant"] == "no2" and m["horizon_hours"] == 48 for m in fetched)
 
 
-def test_save_model_metrics_validation(client, db_session):
-    response = client.post("/api/model/metrics", json={"model_name": "", "pollutant": "pm2", "horizon_hours": 24})
+def test_save_model_metrics_validation(client, db_session, auth_headers):
+    response = client.post(
+        "/api/model/metrics",
+        json={"model_name": "", "pollutant": "pm2", "horizon_hours": 24},
+        headers=auth_headers,
+    )
     assert response.status_code == 400
-    response = client.post("/api/model/metrics", json={"model_name": "nn", "pollutant": "pm2"})
+    response = client.post(
+        "/api/model/metrics",
+        json={"model_name": "nn", "pollutant": "pm2"},
+        headers=auth_headers,
+    )
     assert response.status_code in (400, 422)
 
 

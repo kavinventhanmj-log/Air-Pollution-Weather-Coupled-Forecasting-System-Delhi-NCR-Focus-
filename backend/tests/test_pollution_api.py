@@ -61,9 +61,9 @@ def test_pollution_history_not_found(client, db_session):
     assert response.status_code == 404
 
 
-def test_pollution_ingest_mocked(client, db_session, monkeypatch):
+def test_pollution_ingest_mocked(client, db_session, monkeypatch, auth_headers):
     monkeypatch.setattr(cpcb_service, "fetch_ncr_records", lambda **k: _records_fixture())
-    response = client.post("/api/pollution/ingest")
+    response = client.post("/api/pollution/ingest", headers=auth_headers)
     assert response.status_code == 200, response.text
     summary = response.json()
     assert summary["records_fetched"] == 4
@@ -81,10 +81,10 @@ def test_pollution_ingest_mocked(client, db_session, monkeypatch):
     assert noida["co"] == 1.8
 
 
-def test_pollution_ingest_is_idempotent(client, db_session, monkeypatch):
+def test_pollution_ingest_is_idempotent(client, db_session, monkeypatch, auth_headers):
     monkeypatch.setattr(cpcb_service, "fetch_ncr_records", lambda **k: _records_fixture())
-    first = client.post("/api/pollution/ingest").json()
-    second = client.post("/api/pollution/ingest").json()
+    first = client.post("/api/pollution/ingest", headers=auth_headers).json()
+    second = client.post("/api/pollution/ingest", headers=auth_headers).json()
     assert first["inserted"] == 3
     assert second["inserted"] == 0
     assert second["updated"] == 0
@@ -93,19 +93,19 @@ def test_pollution_ingest_is_idempotent(client, db_session, monkeypatch):
     assert len(latest) == 3
 
 
-def test_pollution_ingest_missing_key(client, db_session, monkeypatch):
+def test_pollution_ingest_missing_key(client, db_session, monkeypatch, auth_headers):
     def boom(api_key=None, cities=None):
         raise CpcbError("missing_key", "DATA_GOV_API_KEY is not configured.")
     monkeypatch.setattr(cpcb_service, "fetch_ncr_records", boom)
-    response = client.post("/api/pollution/ingest")
+    response = client.post("/api/pollution/ingest", headers=auth_headers)
     assert response.status_code == 400
     assert "DATA_GOV_API_KEY" in response.json()["detail"]
 
 
-def test_pollution_ingest_fetch_failure(client, db_session, monkeypatch):
+def test_pollution_ingest_fetch_failure(client, db_session, monkeypatch, auth_headers):
     def boom(api_key=None, cities=None):
         raise CpcbError("empty", "No CPCB records returned (network=ConnectionError).")
     monkeypatch.setattr(cpcb_service, "fetch_ncr_records", boom)
-    response = client.post("/api/pollution/ingest")
+    response = client.post("/api/pollution/ingest", headers=auth_headers)
     assert response.status_code == 502
     assert "No CPCB records" in response.json()["detail"]
